@@ -15,7 +15,7 @@ Continuar un prototipo independiente de runtime PS3 específico para el juego. *
 
 - Host hardware report: Ryzen 5 3500U (4 cores / 8 threads), Radeon Vega 8, about 10 GB RAM; the supplied Task Manager image showed 92% memory use at that moment.
 - Prior project Vulkan probes reported Vulkan 1.2 on Vega 8 and rendered synthetic output. Offscreen throughput varied strongly with internal resolution. No game code/workload ran.
-- New PPU foundation in `src/Gow3Runtime/ppu/`: a C reference interpreter for a small, explicitly incomplete subset of integer, branch, and memory instructions. ELF mapping and all execution checks use synthetic fixtures; this is not a game-compatible CPU or game loader.
+- New PPU foundation in `src/Gow3Runtime/ppu/`: a C reference interpreter for a small, explicitly incomplete subset of integer, branch, and memory instructions. A standalone Windows console host now loads raw PPC64 ELF files and runs to a bounded budget or syscall handoff; only synthetic input has been used. This is not a game-compatible CPU or launcher.
 - The Windows x64 prototype builds with Zig 0.17.0 and currently passes 64 synthetic checks. The earlier Zig 0.15.2 package is incomplete and was not used for that result.
 - Legacy RPCS3 launcher/profile-writer files were removed from the current source tree as part of the standalone pivot; they remain only in Git history.
 - The previously observed ISO was attributed by its adjacent README to a third-party ROM download source. The project will not inspect, extract, decrypt, execute, copy, or move that ISO. No game file is in Git.
@@ -24,11 +24,11 @@ Continuar un prototipo independiente de runtime PS3 específico para el juego. *
 
 The largest unknowns are PPU coverage and dynamic recompilation, SPU instruction/scheduling compatibility, PS3 services, RSX command/shader translation, memory pressure, and stable presentation on this AMD driver. 50–60 FPS is only assessable after representative gameplay runs. Each gate may stop or rescope the effort; no performance promise is made.
 
-Next: repair/use a complete compiler toolchain; build and run the synthetic PPU checks; then expand instruction coverage against the published ISA. Next design a loader only for a lawful, user-provided decrypted executable. Game-dependent testing is blocked until suitable lawful inputs are available. Do not create duplicate game data.
+Next: expand instruction coverage against the published ISA and establish an appropriate decrypted ELF input. Game-dependent testing is blocked until a suitable executable and the missing PS3 services are available. Do not create duplicate game data.
 
 La mayor incertidumbre está en cobertura/recompilación PPU, compatibilidad y planificación SPU, servicios PS3, traducción de comandos/shaders RSX, presión de memoria y presentación estable con este driver AMD. Los 50–60 FPS solo se pueden evaluar con juego representativo. Cada etapa puede detener o reducir el alcance; no se promete rendimiento.
 
-Siguiente: reparar o usar una toolchain completa; compilar y ejecutar las comprobaciones sintéticas PPU; ampliar la cobertura con la ISA publicada. Después diseñar un loader únicamente para un ejecutable descifrado que el usuario haya obtenido legalmente. Las pruebas dependientes del juego esperan insumos adecuados. No duplicar archivos del juego.
+Siguiente: ampliar la cobertura PPU con la ISA publicada y conseguir un ELF descifrado adecuado. Las pruebas dependientes del juego esperan un ejecutable compatible y servicios PS3 que aún faltan. No duplicar archivos del juego.
 
 ## References / Fuentes
 

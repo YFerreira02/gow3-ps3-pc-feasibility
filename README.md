@@ -40,6 +40,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Build-PpuPrototype.p
 
 This uses the local Zig compiler under ignored `work/` to build a native Windows test executable. It runs synthetic tests only and never opens game files.
 
+## Build the standalone host executable
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Build-PpuHost.ps1
+```
+
+The executable is written to `work\PpuHost\Gow3PpuHost.exe`. It accepts a raw, decrypted big-endian PPC64 ELF and an optional instruction budget. The build runs an asset-free synthetic ELF smoke run. The host does not support SELF decryption or PS3 syscall services, and is not yet able to launch *God of War III*.
+
+El ejecutable queda en `work\PpuHost\Gow3PpuHost.exe`. Recibe un ELF PPC64 big-endian ya descifrado y, opcionalmente, un límite de instrucciones. La compilación ejecuta una prueba sintética sin recursos del juego. El host aún no descifra SELF ni implementa servicios del sistema PS3, así que todavía no inicia *God of War III*.
+
 ## Repository map
 
 - `src/Gow3Runtime/ppu/`: initial asset-free PPU interpreter prototype.
