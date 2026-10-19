@@ -44,7 +44,7 @@ La meta de 50–60 FPS **no es un criterio de aceptación hasta medirla en el ju
 4. Investigate a small PPU/SPU/RSX technical experiment only after the baseline reveals a specific bottleneck and a build/toolchain route.
 5. Reassess the standalone-port idea after data. Stop or rescope if the reference PC cannot meet the performance goal under the reused execution path.
 
-The prototype source is `src/Gow3Launcher/`. To build the self-contained Windows x64 package, run `tools/Publish-Gow3Launcher.ps1`; output goes under ignored `work/Gow3LauncherRelease/`. RPCS3 and game files are deliberately not bundled.
+The prototype source is `src/Gow3Launcher/`. To build the self-contained Windows x64 package, run `tools/Publish-Gow3Launcher.ps1`; output goes under ignored `work/Gow3LauncherRelease/`. The launcher creates a `config_BCES00510.yml` custom profile, selects Vulkan on the Vega 8, and sets a user-selectable 25–100% resolution scale (based on 1280×720). It backs up an existing profile before changing it. The selected resolution has not been measured in game. RPCS3 and game files are deliberately not bundled.
 
 For a CPU/memory sample, start the chosen application and workload manually, then run `tools/Measure-Process.ps1 -ProcessName rpcs3 -DurationSeconds 180 -SampleIntervalSeconds 1`. The CSV defaults to the ignored `work/` folder. This recorder measures process CPU time, working set, private memory, thread count, handles, and system-available RAM. It does not measure FPS, GPU utilization, or game correctness; pair it with a frame-time capture and note the scene/settings separately. Use only a game dump obtained lawfully.
 
@@ -54,7 +54,7 @@ For a CPU/memory sample, start the chosen application and workload manually, the
 4. Investigar un experimento pequeño de PPU/SPU/RSX solo cuando la medición inicial muestre un cuello de botella concreto y exista una ruta de compilación.
 5. Revaluar el port independiente con datos. Detener o cambiar el alcance si el PC de referencia no alcanza la meta con la ruta que reutiliza el emulador.
 
-El código está en `src/Gow3Launcher/`. Para crear el paquete autocontenido Windows x64, ejecuta `tools/Publish-Gow3Launcher.ps1`; el resultado queda en `work/Gow3LauncherRelease/`, excluida de Git. RPCS3 y los archivos del juego no se incluyen.
+El código está en `src/Gow3Launcher/`. Para crear el paquete autocontenido Windows x64, ejecuta `tools/Publish-Gow3Launcher.ps1`; el resultado queda en `work/Gow3LauncherRelease/`, excluida de Git. El launcher crea el perfil `config_BCES00510.yml`, selecciona Vulkan en la Vega 8 y configura una escala interna ajustable del 25–100% con base en 1280×720. Respalda el perfil existente antes de cambiarlo. Esta escala aún no se ha medido en el juego. RPCS3 y los archivos del juego no se incluyen.
 
 Para recoger una muestra de CPU/memoria, inicia manualmente la aplicación y la escena que se vaya a medir; luego ejecuta `tools/Measure-Process.ps1 -ProcessName rpcs3 -DurationSeconds 180 -SampleIntervalSeconds 1`. El CSV se guarda por defecto en `work/`, excluido de Git. El capturador registra tiempo de CPU del proceso, memoria física y privada, hilos, handles y RAM disponible del sistema. No mide FPS, uso de GPU ni funcionamiento correcto del juego; debe acompañarse de captura de tiempos de cuadro y anotaciones de escena/ajustes. Usa solo una copia del juego obtenida legalmente.
 

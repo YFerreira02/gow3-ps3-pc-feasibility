@@ -35,10 +35,12 @@ USO
 1. Abre "GOW3 PS3 Launcher.exe".
 2. Selecciona rpcs3.exe.
 3. Selecciona la carpeta extraida que contiene PS3_GAME.
-4. Comprueba Vulkan 1.2 y luego inicia el juego.
-5. Desmarca el inicio directo si quieres ver la ventana principal de RPCS3.
+4. Elige la escala interna deseada; la app crea un perfil BCES00510 para Vulkan en Vega 8.
+5. Comprueba Vulkan 1.2 y luego inicia el juego.
+6. Desmarca el inicio directo si quieres ver la ventana principal de RPCS3.
 
 Este programa verifica PARAM.SFO y solo acepta el ID BCES00510 (version europea).
+Escala interna: 25-100% de 1280x720; el perfil anterior se respalda al cambiarlo.
 No abre ISO, no instala firmware, no configura ajustes/parches y no es un port nativo.
 La compatibilidad y el rendimiento dependen de RPCS3 y del equipo; 50-60 FPS no esta garantizado.
 La configuracion local se guarda en %LOCALAPPDATA%\GOW3PS3PC.

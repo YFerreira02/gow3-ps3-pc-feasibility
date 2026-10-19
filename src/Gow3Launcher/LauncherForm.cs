@@ -10,6 +10,7 @@ internal sealed class LauncherSettings
     public string Rpcs3Path { get; set; } = "";
     public string GameFolder { get; set; } = "";
     public bool DirectBoot { get; set; } = true;
+    public int ResolutionScalePercent { get; set; } = 50;
 }
 
 internal sealed class LauncherForm : Form
@@ -18,6 +19,8 @@ internal sealed class LauncherForm : Form
     private readonly TextBox _rpcs3Path = new() { Dock = DockStyle.Fill };
     private readonly TextBox _gamePath = new() { Dock = DockStyle.Fill };
     private readonly CheckBox _directBoot = new() { Text = "Iniciar el juego directamente ( --no-gui )", Checked = true, AutoSize = true };
+    private readonly TrackBar _resolutionScale = new() { Minimum = 25, Maximum = 100, SmallChange = 1, LargeChange = 25, TickFrequency = 25, Value = 50, Width = 180, Height = 38 };
+    private readonly Label _resolutionLabel = new() { AutoSize = true, Padding = new Padding(0, 8, 8, 0) };
     private readonly Label _status = new() { AutoSize = true, Text = "Selecciona RPCS3 y una carpeta PS3_GAME extraída." };
     private readonly TextBox _output = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill };
     private readonly string _settingsPath;
@@ -86,6 +89,14 @@ internal sealed class LauncherForm : Form
         var actions = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = true, Padding = new Padding(0, 4, 0, 10) };
         _directBoot.CheckedChanged += (_, _) => SaveSettings();
         actions.Controls.Add(_directBoot);
+        actions.Controls.Add(new Label { Text = "Escala interna:", AutoSize = true, Padding = new Padding(10, 8, 0, 0) });
+        _resolutionScale.ValueChanged += (_, _) => { UpdateResolutionLabel(); SaveSettings(); };
+        actions.Controls.Add(_resolutionScale);
+        actions.Controls.Add(_resolutionLabel);
+        UpdateResolutionLabel();
+        var profile = new Button { Text = "Guardar perfil Vulkan/Vega 8", AutoSize = true, Padding = new Padding(10, 4, 10, 4) };
+        profile.Click += (_, _) => SaveGameProfile();
+        actions.Controls.Add(profile);
         var launch = new Button { Text = "Iniciar God of War III", AutoSize = true, Padding = new Padding(10, 4, 10, 4) };
         launch.Click += (_, _) => LaunchGame();
         actions.Controls.Add(launch);
@@ -114,6 +125,7 @@ internal sealed class LauncherForm : Form
             _rpcs3Path.Text = settings.Rpcs3Path;
             _gamePath.Text = settings.GameFolder;
             _directBoot.Checked = settings.DirectBoot;
+            _resolutionScale.Value = Math.Clamp(settings.ResolutionScalePercent, _resolutionScale.Minimum, _resolutionScale.Maximum);
         }
         catch (Exception ex)
         {
@@ -125,7 +137,7 @@ internal sealed class LauncherForm : Form
     {
         try
         {
-            var settings = new LauncherSettings { Rpcs3Path = _rpcs3Path.Text.Trim(), GameFolder = _gamePath.Text.Trim(), DirectBoot = _directBoot.Checked };
+            var settings = new LauncherSettings { Rpcs3Path = _rpcs3Path.Text.Trim(), GameFolder = _gamePath.Text.Trim(), DirectBoot = _directBoot.Checked, ResolutionScalePercent = _resolutionScale.Value };
             File.WriteAllText(_settingsPath, JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true }));
         }
         catch (Exception ex) { AppendLog($"No se guardó la configuración: {ex.Message}"); }
@@ -199,6 +211,13 @@ internal sealed class LauncherForm : Form
         var ps3Game = GetPs3GameDirectory();
         var eboot = GetEbootPath();
         var titleId = ps3Game is null ? null : ReadTitleId(ps3Game);
+        var profileReady = false;
+        if (emulatorReady)
+        {
+            try { profileReady = File.Exists(Rpcs3ProfileWriter.GetProfilePath(_rpcs3Path.Text.Trim().Trim('"'))); }
+            catch (ArgumentException) { }
+            catch (FileNotFoundException) { }
+        }
         var gameStatus = eboot is null
             ? "Juego: falta PS3_GAME\\USRDIR\\EBOOT.BIN"
             : titleId is null
@@ -206,8 +225,43 @@ internal sealed class LauncherForm : Form
                 : titleId.Equals(ExpectedTitleId, StringComparison.OrdinalIgnoreCase)
                     ? $"God of War III: {titleId}"
                     : $"ID distinta: {titleId} (se espera {ExpectedTitleId})";
-        _status.Text = (emulatorReady ? "RPCS3: encontrado" : "RPCS3: selecciona rpcs3.exe") + "  ·  " +
-            gameStatus;
+        var profileStatus = !emulatorReady ? "" : profileReady ? "  ·  Perfil Vega 8: listo" : "  ·  Perfil Vega 8: se creará al iniciar";
+        _status.Text = (emulatorReady ? "RPCS3: encontrado" : "RPCS3: selecciona rpcs3.exe") + "  ·  " + gameStatus + profileStatus;
+    }
+
+    private void UpdateResolutionLabel()
+    {
+        var width = 1280 * _resolutionScale.Value / 100;
+        var height = 720 * _resolutionScale.Value / 100;
+        _resolutionLabel.Text = $"{_resolutionScale.Value}% ({width}×{height})";
+    }
+
+    private void SaveGameProfile()
+    {
+        var emulator = _rpcs3Path.Text.Trim().Trim('"');
+        if (!File.Exists(emulator))
+        {
+            MessageBox.Show(this, "Selecciona primero un rpcs3.exe válido.", "Falta RPCS3", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        try
+        {
+            var width = 1280 * _resolutionScale.Value / 100;
+            var height = 720 * _resolutionScale.Value / 100;
+            var result = Rpcs3ProfileWriter.WriteProfile(emulator, _resolutionScale.Value);
+            var profilePath = result.ProfilePath;
+            AppendLog($"Perfil {ExpectedTitleId} guardado: Vulkan · Vega 8 · escala {_resolutionScale.Value}% ({width}×{height} aprox.).");
+            AppendLog($"Ruta: {profilePath}");
+            if (result.BackupPath is not null) AppendLog($"Copia previa: {result.BackupPath}");
+            AppendLog("RPCS3 aplica este perfil por Title ID; el rendimiento debe medirse en juego.");
+            MessageBox.Show(this, $"Perfil guardado para {ExpectedTitleId}.\n\nVulkan: Radeon Vega 8\nResolución interna aproximada: {width}×{height}\n\nCopia del perfil anterior, si existía, guardada junto al archivo.", "Perfil creado", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"No se pudo guardar el perfil: {ex.Message}", "Error de configuración", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            AppendLog($"Error al guardar perfil: {ex}");
+        }
     }
 
     private void LaunchGame()
@@ -229,6 +283,18 @@ internal sealed class LauncherForm : Form
         if (!ExpectedTitleId.Equals(titleId, StringComparison.OrdinalIgnoreCase))
         {
             MessageBox.Show(this, $"El PARAM.SFO no identifica esta edición como {ExpectedTitleId}. El launcher evita iniciar un título distinto o una carpeta incompleta.", "Juego no validado", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        try
+        {
+            var profile = Rpcs3ProfileWriter.WriteProfile(emulator, _resolutionScale.Value);
+            AppendLog($"Perfil de rendimiento aplicado a {ExpectedTitleId}: Vulkan · Vega 8 · {_resolutionScale.Value}%.");
+            if (profile.BackupPath is not null) AppendLog($"Perfil previo respaldado: {profile.BackupPath}");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"No se pudo preparar el perfil de RPCS3: {ex.Message}", "Error de perfil", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
 
