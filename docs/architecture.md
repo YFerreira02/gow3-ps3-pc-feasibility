@@ -1,71 +1,46 @@
-# Candidate architecture / Arquitectura candidata
+# Standalone runtime architecture / Arquitectura independiente
 
-## Decision in one paragraph / Decisión resumida
+## Meaning of “native” / Qué significa “nativo”
 
-The project should be a Windows 11 application with a game-specific launcher/configuration layer and a Vulkan renderer, inspired by the *shape* of `gow3_pc`. It cannot directly run the PS3 executable as ordinary x86-64 PC code. To use the PS3 release, it needs a translation/emulation layer for the PS3 CPU and system interfaces plus an RSX-to-Vulkan graphics path. Calling the app “native” can describe its Windows UI, build, and output renderer; it cannot truthfully mean unmodified PS3 machine code executes natively on the Ryzen CPU. This approach may still be more focused than a general-purpose console emulator, but focus alone does not guarantee higher FPS.
+The app will be a Windows-native executable and own its UI, input, audio, memory manager, game-specific compatibility services, and Vulkan renderer. To use a PS3 binary it must still translate/emulate the Cell CPU and PS3 platform. It is standalone; it is not direct x86 execution of the PS3 build. RPCS3 is explicitly not a component or subprocess.
 
-El proyecto debería ser una aplicación de Windows 11 con launcher/configuración específica del juego y un renderer Vulkan, inspirada en la *estructura* de `gow3_pc`. No puede ejecutar el EBOOT de PS3 como código x86-64 ordinario. Para usar la versión de PS3 necesita traducción/emulación de CPU e interfaces del sistema, además de una ruta gráfica RSX a Vulkan. “Nativo” puede describir la interfaz de Windows, la compilación y el renderer; no significa que el código PS3 sin modificar se ejecute directamente en el Ryzen. Este enfoque podría ser más específico que un emulador general, pero eso no garantiza más FPS.
+La app será un ejecutable propio de Windows y controlará interfaz, entrada, audio, memoria, servicios de compatibilidad del juego y renderer Vulkan. Para usar un binario PS3 aún debe traducir/emular la CPU Cell y la plataforma PS3. Es independiente, pero no ejecuta el binario de PS3 directamente como x86. RPCS3 no será un componente ni subproceso.
 
-## Proposed layers / Capas propuestas
+## Components / Componentes
 
-| Layer | Responsibility | Feasibility notes |
-| --- | --- | --- |
-| Launcher and settings | Detect a user-provided game directory/dump, select adapter, choose output and internal resolution, logs, patches, controller settings. | Closest to the useful product structure of `gow3_pc`; relatively low risk. Never download or bundle the game. |
-| Game profile | Known title ID/region/version, boot sequence, validated compatibility patches, game-specific workarounds. | Requires separate validation for `BCES00510` and version 1.03. Do not apply patches by guessed offsets. |
-| PPU execution | Translate PowerPC PPU code to host x86-64, implement required PS3 system calls and thread/memory behavior. | Could use mature emulator components under their licenses or be reimplemented; a purpose-built translator is a major project. |
-| SPU execution | Translate Cell SPU programs, scheduling, local stores, DMA/mailboxes, synchronization. | Likely a key CPU bottleneck. RPCS3 has an SPU LLVM JIT; a simple interpreter or per-game hacks risk severe performance/compatibility costs. |
-| PS3 service layer | Filesystem, timers, events, audio, controller, save data, shaders, system modules needed by the title. | Must be driven by evidence from the game's own execution and logs; broad system compatibility is not required if the title profile is narrow. |
-| RSX frontend | Consume PS3 graphics command buffers and GPU state; translate shaders, render targets, synchronization, and draw calls. | The most substantial graphics-specific work. Vulkan is the host API; it does not parse/translate RSX commands by itself. |
-| Vulkan backend | Vulkan 1.2 device, resource allocation, shader pipeline, offscreen render targets, presentation, resolution scaling. | Start with a synthetic scene and Vega 8. Avoid mandatory 1.3 features; check limits/extensions and driver behavior at runtime. The Win32 swapchain path currently stalls on this AMD driver; an offscreen-to-host-memory output path is a measured fallback, with a substantial resolution-dependent cost. |
-| Diagnostics | Frame-time/CPU-GPU timing, translation cache, memory use, shader cache, compatibility log, crash dumps without game payload. | Essential to determine if a targeted runtime actually improves the user's experience over RPCS3. |
+| Component | Responsibility | State / Estado |
+|---|---|---|
+| Windows host | Window, input, audio output, logging, settings, crash handling | Existing synthetic Vulkan probes; no game UI/runtime yet |
+| PPU core | PowerPC 64-bit register/state model, instruction decoding, exceptions, translation blocks | C reference core executes `addi`, `addis`, `ori` only; synthetic checks pass |
+| PPU dynarec | Compile verified PPU blocks to x86-64, cache/invalidate, map exceptions | Not started |
+| PS3 services | Threads, virtual memory, filesystem, timers, synchronization, modules used by this title | Not started; requires lawful decrypted executable evidence |
+| SPU runtime | SPU ISA, local store, DMA, mailboxes, events and scheduling | Not started; likely major CPU/performance risk |
+| RSX frontend | Command processor, GPU state, resources, synchronization, shader semantics | Not started |
+| Vulkan backend | Vulkan 1.2 device, pipeline, render-target and SPIR-V path, resolution scaling | Synthetic host probes exist; no RSX commands or game shaders |
+| Title profile | Region/version boot setup and evidence-backed compatibility fixes | Not started; no guessed offsets/patches |
 
-## How `gow3_pc` informs this project / Qué aporta `gow3_pc`
+## Data flow / Flujo de datos
 
-Useful design ideas to evaluate: a small loader, game-specific runtime boundary, configuration/patch layer, and clear separation between title logic and graphics backend. Its PS4 execution path is not a PS3 implementation: the PS4 remaster has x86-64 code, while the PS3 release has Cell PPU/SPU code and RSX commands. Its current shadPS4 path also documents a Vulkan 1.3 requirement, whereas this project must keep 1.2 as its minimum. Do not copy code until the project's GPL-2.0 obligations and compatibility are explicitly decided.
+```text
+user-provided decrypted PS3 executable (future, not current ISO)
+  -> ELF/container validation and memory map
+  -> PPU translated blocks + PS3 services
+  -> SPU translated workloads + scheduling
+  -> RSX command/state translation
+  -> Vulkan 1.2 resources, shaders, render targets
+  -> Windows presentation
+```
 
-Ideas útiles: loader pequeño, límite claro del runtime específico del juego, configuración/parches separados y separación entre el perfil del juego y el backend gráfico. Su ruta de ejecución de PS4 no implementa PS3: la remasterización de PS4 usa código x86-64 y la edición de PS3 usa Cell PPU/SPU y comandos RSX. Además, la ruta actual de shadPS4 documenta Vulkan 1.3 como requisito, mientras este proyecto debe conservar 1.2 como mínimo. No copiar código hasta decidir expresamente las obligaciones de GPL-2.0.
+Every arrow is unfinished except isolated synthetic Vulkan host probes and the tiny PPU interpreter subset. The previously identified third-party ISO is not an input to development: do not move, copy, inspect, extract, decrypt, or execute it. Leave the ZIP where it is. No game content is tracked.
 
-## Candidate technical routes / Rutas técnicas candidatas
+## Important limits / Límites
 
-### A. Build all translation/runtime components from scratch
+- Lower render resolution helps only a GPU-bound workload; it cannot fix CPU-bound PPU/SPU translation.
+- The Vega 8 shares system memory. The supplied Task Manager snapshot showed about 92% RAM use, so memory budget and page pressure are concerns.
+- A low-power Ryzen 5 3500U and this title's unknown SPU workload make 50–60 FPS a high-risk, unverified goal.
+- Vulkan 1.2 is a required host API floor. Check the negotiated version and capabilities at runtime; do not silently require Vulkan 1.3.
+- A synthetic clear or triangle is only a renderer smoke test.
 
-Maximum control over a game-specific design, but the riskiest and slowest option. It requires compatible PPU/SPU translation, PS3 service behavior, RSX command handling, shader conversion, audio, input, timing, and enough game-specific debugging to pass representative scenes. This route is not justified before a small prototype proves a concrete advantage.
+## Inspiration / Inspiración
 
-### B. Reuse mature RPCS3 components selectively
-
-Potentially reduces CPU/RSX implementation work, but creates licensing, integration, architecture, and maintenance obligations. The existing emulator's generalized compatibility can carry code paths that a single-title runtime would not need; pruning them safely is not automatic. The repo should first map component boundaries and license terms, then estimate whether a minimal host is actually smaller/faster.
-
-### C. Keep RPCS3 as the baseline and build an external game profile/tooling
-
-Lowest engineering risk and best comparison baseline: automate configuration documentation, title-specific patch discovery, and performance capture around RPCS3. It would not meet the user's “without RPCS3” end goal, but could show whether the current bottleneck is CPU, GPU, memory, or configuration before committing to a new runtime.
-
-### D. Render offscreen with Vulkan and present through Windows
-
-Avoid the failing Vulkan Win32 swapchain by rendering into an optimal-tiled Vulkan image, copying it to a mapped host-visible buffer, and displaying/scaling the pixels through the Windows UI. This path passed a 60-frame validation-enabled synthetic run. At 640×360 internal resolution, the clear/readback/managed-copy path measured roughly 49–75 frames/s when shown at 1280×720 across runs; throughput dropped to about 33 at 960×540 and 20 at 1280×720 internal. This is a diagnostic fallback, not a performance result for the game. A realistic RSX-like workload, display frame pacing, CPU/SPU translation, and memory use could make it too slow.
-
-**Current recommendation:** Prototype the Vulkan 1.2 backend and a non-game synthetic workload first; investigate RPCS3 component reuse in parallel through source/license review. Do not start a full RSX or SPU implementation until these gates are passed.
-
-## Performance gates / Puertas de rendimiento
-
-The target requires an average frame budget of 16.7–20 ms at 50–60 FPS, with stable frame pacing. The full game can be limited by CPU translation, SPU scheduling, graphics translation, memory bandwidth, shader compilation, or game logic. Lower internal resolution only helps when GPU fill/render cost is the bottleneck; it will not fix CPU/SPU saturation. The Vega 8 shares system memory and the machine has about 10 GB total, so renderer allocations and cache growth need explicit budgets.
-
-1. **Passed:** Vulkan 1.2 instance, physical device, logical graphics device/queue, Win32 surface, queue presentation support, and one cleared swapchain image presented on Vega 8.
-2. **Passed (single-frame smoke test):** basic vertex/fragment shader graphics pipeline and triangle presented at 960×540 and 1280×720. These are output resolutions; an offscreen internal-resolution scaler remains to be built.
-3. **Win32 swapchain path blocked:** FIFO with triple buffering presents three frames but times out on the next acquire; immediate mode crashes. Khronos-style semaphore handling and synchronous render-before-present do not resolve it. The driver is implicated, but a universal AMD bug is not proven.
-4. **Offscreen fallback passed (synthetic only):** Vulkan 1.2 renders to an image, copies to host memory, then Windows scales it for display. Continue only if a representative renderer workload and measured display frame pacing retain target performance; otherwise test another driver or host-output path.
-5. Establish a lawful, reproducible way to profile the user's own game dump without putting it in GitHub.
-6. Measure representative title workloads with a proven runtime as a reference; do not treat cutscenes or menus as gameplay performance.
-7. Only claim feasibility for 50–60 FPS if sustained representative scenes meet the budget after shader warm-up and without large recurring stutters.
-
-## Data boundary / Límite de datos
-
-Keep the ISO, extracted files, EBOOT, firmware, keys, game shaders/assets, and title-specific copyrighted data out of this repository. Store only source code written for the project, public technical references, reproducible test descriptions, and non-sensitive measurements. User-supplied files remain on the user's machine.
-
-## Sources / Fuentes
-
-- [`gow3_pc` README and license](https://github.com/FelipePrado0/gow3_pc)
-- [shadPS4 user requirements](https://github.com/shadps4-emu/shadPS4/wiki/I.-Quick-start-%5BUsers%5D/8eb552946733b22cdd78fddd9fd6eb197072e088)
-- [RPCS3 SPU LLVM recompiler](https://github.com/RPCS3/rpcs3/blob/master/rpcs3/Emu/Cell/SPULLVMRecompiler.cpp)
-- [RPCS3 SELF container parser](https://github.com/RPCS3/rpcs3/blob/master/rpcs3/Crypto/unself.h)
-- [RPCS3 developer information](https://github.com/RPCS3/rpcs3/wiki/developer-information)
-- [Khronos Win32 surface extension](https://registry.khronos.org/vulkan/specs/latest/man/html/VK_KHR_win32_surface.html)
+[`gow3_pc`](https://github.com/FelipePrado0/gow3_pc) targets the PS4 remaster and cannot execute this PS3 build. Its launcher/configuration/patch organization is useful as product inspiration. No source code has been reused. See [`approach.md`](approach.md) for license and implementation gates.

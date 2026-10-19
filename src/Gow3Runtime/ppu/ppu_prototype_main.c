@@ -1,0 +1,59 @@
+#include "ppu_core.h"
+
+typedef void *HANDLE;
+__declspec(dllimport) HANDLE __stdcall GetStdHandle(unsigned long);
+__declspec(dllimport) int __stdcall WriteFile(HANDLE, const void *, unsigned long, unsigned long *, void *);
+__declspec(dllimport) void __stdcall ExitProcess(unsigned int);
+
+#define D_FORM(op, rt, ra, imm) (((uint32_t)(op) << 26) | ((uint32_t)(rt) << 21) | ((uint32_t)(ra) << 16) | (uint16_t)(imm))
+#define EMIT_BE(dst, i, word) do { \
+    (dst)[(i) * 4] = (uint8_t)((word) >> 24); \
+    (dst)[(i) * 4 + 1] = (uint8_t)((word) >> 16); \
+    (dst)[(i) * 4 + 2] = (uint8_t)((word) >> 8); \
+    (dst)[(i) * 4 + 3] = (uint8_t)(word); \
+} while (0)
+
+static void report(const char *message)
+{
+    unsigned long written = 0;
+    unsigned long length = 0;
+    while (message[length]) ++length;
+    WriteFile(GetStdHandle((unsigned long)-11), message, length, &written, 0);
+}
+
+static int check(int condition, const char *message)
+{
+    report(condition ? "PASS: " : "FAIL: ");
+    report(message);
+    report("\r\n");
+    return condition;
+}
+
+void entry(void)
+{
+    uint8_t code[16];
+    EMIT_BE(code, 0, D_FORM(14, 3, 0, 5));
+    EMIT_BE(code, 1, D_FORM(15, 4, 3, 1));
+    EMIT_BE(code, 2, D_FORM(24, 4, 5, 0x20));
+    EMIT_BE(code, 3, D_FORM(14, 6, 0, -1));
+
+    PpuState state;
+    ppu_state_init(&state, code, sizeof(code), 0);
+    int ok = 1;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[3] == 5 && state.pc == 4,
+                "addi, RA=0, and PC advance");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[4] == 0x10005,
+                "addis signed immediate shifted by 16");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[5] == 0x10025,
+                "ori source and destination register fields");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == UINT64_MAX,
+                "addi sign extension");
+    ok &= check(ppu_step(&state) == PPU_STEP_BAD_ARGUMENT,
+                "out-of-range instruction fetch rejected");
+
+    const uint8_t unsupported[] = { 0, 0, 0, 0 };
+    ppu_state_init(&state, unsupported, sizeof(unsupported), 0);
+    ok &= check(ppu_step(&state) == PPU_STEP_UNSUPPORTED && state.pc == 0,
+                "unsupported instruction stops without advancing");
+    ExitProcess(ok ? 0u : 1u);
+}
