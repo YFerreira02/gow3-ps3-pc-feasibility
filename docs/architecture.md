@@ -47,7 +47,7 @@ The target requires an average frame budget of 16.7–20 ms at 50–60 FPS, with
 
 1. **Passed:** Vulkan 1.2 instance, physical device, logical graphics device/queue, Win32 surface, queue presentation support, and one cleared swapchain image presented on Vega 8.
 2. **Passed (single-frame smoke test):** basic vertex/fragment shader graphics pipeline and triangle presented at 960×540 and 1280×720. These are output resolutions; an offscreen internal-resolution scaler remains to be built.
-3. **Next:** fix and validate swapchain/presentation teardown, then build a stable multi-frame shader-backed synthetic workload with independent internal/output resolutions; record frame-time distribution, frame pacing, and memory at several configurations.
+3. **In progress:** Khronos validation helped fix an invalid enum, but the hand-written interop still crashes at the third acquire and reports a swapchain leak on one-frame teardown. Reproduce using a known-good native Vulkan sample before attributing this to the driver; then validate swapchain/presentation teardown and build a stable multi-frame workload with independent internal/output resolutions.
 4. Establish a lawful, reproducible way to profile the user's own game dump without putting it in GitHub.
 5. Measure representative title workloads with a proven runtime as a reference; do not treat cutscenes or menus as gameplay performance.
 6. Only claim feasibility for 50–60 FPS if sustained representative scenes meet the budget after shader warm-up and without large recurring stutters.
