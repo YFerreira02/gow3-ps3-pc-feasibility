@@ -761,6 +761,7 @@ PpuStepResult ppu_step(PpuState *state)
             switch (xo) {
             case 534: width = 4; is_load = 1; byte_reverse = 1; break; /* lwbrx */
             case 790: width = 2; is_load = 1; byte_reverse = 1; break; /* lhbrx */
+            case 532: width = 8; is_load = 1; byte_reverse = 1; break; /* ldbrx */
             case 23: width = 4; is_load = 1; break;  /* lwzx */
             case 55: width = 4; is_load = 1; update = 1; break; /* lwzux */
             case 87: width = 1; is_load = 1; break;  /* lbzx */
@@ -782,6 +783,7 @@ PpuStepResult ppu_step(PpuState *state)
             case 181: width = 8; update = 1; break; /* stdux */
             case 662: width = 4; byte_reverse = 1; break; /* stwbrx */
             case 918: width = 2; byte_reverse = 1; break; /* sthbrx */
+            case 660: width = 8; byte_reverse = 1; break; /* stdbrx */
             default: break;
             }
             if (width != 0) {

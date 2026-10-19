@@ -1019,6 +1019,21 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_MEMORY_FAULT && state.pc == 16,
                 "misaligned lwbrx faults without advancing PC");
 
+    static uint8_t byte_reversed_doubleword[8];
+    static uint8_t byte_reversed_doubleword_memory[48];
+    EMIT_BE(byte_reversed_doubleword, 0, X_FORM(5, 3, 4, 532, 0)); /* ldbrx */
+    EMIT_BE(byte_reversed_doubleword, 1, X_FORM(6, 3, 4, 660, 0)); /* stdbrx */
+    ppu_state_init(&state, byte_reversed_doubleword, sizeof(byte_reversed_doubleword), 0);
+    ppu_set_memory(&state, byte_reversed_doubleword_memory, sizeof(byte_reversed_doubleword_memory));
+    state.gpr[3] = 32; state.gpr[4] = 0;
+    state.memory[32] = 1; state.memory[33] = 2; state.memory[34] = 3; state.memory[35] = 4;
+    state.memory[36] = 5; state.memory[37] = 6; state.memory[38] = 7; state.memory[39] = 8;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[5] == 0x0807060504030201ull,
+                "ldbrx loads and reverses a big-endian doubleword");
+    state.gpr[6] = 0x1122334455667788ull;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.memory[32] == 0x88 && state.memory[39] == 0x11,
+                "stdbrx stores a doubleword in byte-reversed order");
+
     static uint8_t elf[128] = { 0 };
     elf[0] = 0x7f; elf[1] = 'E'; elf[2] = 'L'; elf[3] = 'F';
     elf[4] = 2; elf[5] = 2; elf[6] = 1;
