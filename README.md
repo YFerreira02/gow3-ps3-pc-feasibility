@@ -50,6 +50,16 @@ The executable is written to `work\PpuHost\Gow3PpuHost.exe`. It accepts a raw, d
 
 El ejecutable queda en `work\PpuHost\Gow3PpuHost.exe`. Recibe un ELF PPC64 big-endian ya descifrado y, opcionalmente, un límite de instrucciones. La compilación ejecuta una prueba sintética sin recursos del juego. El host aún no descifra SELF ni implementa servicios del sistema PS3, así que todavía no inicia *God of War III*.
 
+## GUI prototype / Prototipo con interfaz
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Build-PpuGui.ps1
+```
+
+This opens `work\PpuGui\Gow3PpuGui.exe`, a Win32 window with a file picker, instruction-budget field, and execution status. It can try a raw decrypted PPC64 ELF. Selecting an ISO only reports that ISO loading is not implemented; the GUI is not a playable build and has no game renderer yet.
+
+Este comando abre `work\PpuGui\Gow3PpuGui.exe`, una ventana Win32 con selector de archivo, límite de instrucciones y estado de ejecución. Puede probar un ELF PPC64 crudo y descifrado. Si seleccionas una ISO, informa que ese formato aún no se carga; la interfaz no es un port jugable y todavía no incluye renderer del juego.
+
 ## Repository map
 
 - `src/Gow3Runtime/ppu/`: initial asset-free PPU interpreter prototype.
