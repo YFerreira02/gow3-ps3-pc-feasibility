@@ -313,6 +313,17 @@ PpuStepResult ppu_step(PpuState *state)
                          (uint16_t)state->memory[memory_offset + 1];
         break;
         }
+    case 41: /* lhzu */
+        {
+        size_t memory_offset;
+        if (ra == 0 || rt == ra) return PPU_STEP_UNSUPPORTED;
+        if ((address & 1u) != 0 || !memory_range_offset(state, address, 2, &memory_offset))
+            return PPU_STEP_MEMORY_FAULT;
+        state->gpr[rt] = ((uint16_t)state->memory[memory_offset] << 8) |
+                         (uint16_t)state->memory[memory_offset + 1];
+        state->gpr[ra] = address;
+        break;
+        }
     case 42: /* lha */
         {
         size_t memory_offset;
@@ -323,6 +334,18 @@ PpuStepResult ppu_step(PpuState *state)
         state->gpr[rt] = (uint64_t)(int64_t)(int16_t)value;
         break;
         }
+    case 43: /* lhau */
+        {
+        size_t memory_offset;
+        if (ra == 0 || rt == ra) return PPU_STEP_UNSUPPORTED;
+        if ((address & 1u) != 0 || !memory_range_offset(state, address, 2, &memory_offset))
+            return PPU_STEP_MEMORY_FAULT;
+        const uint16_t value = ((uint16_t)state->memory[memory_offset] << 8) |
+                               (uint16_t)state->memory[memory_offset + 1];
+        state->gpr[rt] = (uint64_t)(int64_t)(int16_t)value;
+        state->gpr[ra] = address;
+        break;
+        }
     case 44: /* sth */
         {
         size_t memory_offset;
@@ -330,6 +353,17 @@ PpuStepResult ppu_step(PpuState *state)
             return PPU_STEP_MEMORY_FAULT;
         state->memory[memory_offset] = (uint8_t)(state->gpr[rt] >> 8);
         state->memory[memory_offset + 1] = (uint8_t)state->gpr[rt];
+        break;
+        }
+    case 45: /* sthu */
+        {
+        size_t memory_offset;
+        if (ra == 0) return PPU_STEP_UNSUPPORTED;
+        if ((address & 1u) != 0 || !memory_range_offset(state, address, 2, &memory_offset))
+            return PPU_STEP_MEMORY_FAULT;
+        state->memory[memory_offset] = (uint8_t)(state->gpr[rt] >> 8);
+        state->memory[memory_offset + 1] = (uint8_t)state->gpr[rt];
+        state->gpr[ra] = address;
         break;
         }
     case 38: /* stb */

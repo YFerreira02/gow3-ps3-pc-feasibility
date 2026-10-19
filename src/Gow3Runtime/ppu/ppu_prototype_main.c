@@ -212,11 +212,14 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_MEMORY_FAULT && state.pc == 0,
                 "misaligned halfword load faults without advancing PC");
 
-    uint8_t update_code[16];
+    uint8_t update_code[28];
     EMIT_BE(update_code, 0, D_FORM(33, 7, 3, 0));  /* lwzu r7,0(r3) */
     EMIT_BE(update_code, 1, D_FORM(37, 5, 3, 4));  /* stwu r5,4(r3) */
     EMIT_BE(update_code, 2, D_FORM(35, 8, 3, -4)); /* lbzu r8,-4(r3) */
     EMIT_BE(update_code, 3, D_FORM(39, 9, 3, 2));  /* stbu r9,2(r3) */
+    EMIT_BE(update_code, 4, D_FORM(41, 10, 3, 0)); /* lhzu r10,0(r3) */
+    EMIT_BE(update_code, 5, D_FORM(43, 11, 3, 2)); /* lhau r11,2(r3) */
+    EMIT_BE(update_code, 6, D_FORM(45, 12, 3, 4)); /* sthu r12,4(r3) */
     memory[4] = 0x12; memory[5] = 0x34; memory[6] = 0x56; memory[7] = 0x78;
     ppu_state_init(&state, update_code, sizeof(update_code), 0);
     ppu_set_memory(&state, memory, sizeof(memory));
@@ -231,6 +234,15 @@ void entry(void)
     state.gpr[9] = 0x1aa;
     ok &= check(ppu_step(&state) == PPU_STEP_OK && memory[6] == 0xaa && state.gpr[3] == 6,
                 "stbu stores byte and writes back updated base");
+    memory[6] = 0x80; memory[7] = 0x01;
+    state.pc = 16; state.gpr[3] = 4;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[10] == 0x1234 && state.gpr[3] == 4,
+                "lhzu zero-extends and writes back updated base");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[11] == (uint64_t)-0x7fff && state.gpr[3] == 6,
+                "lhau sign-extends and writes back updated base");
+    state.gpr[12] = 0x1abcd;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && memory[10] == 0xab && memory[11] == 0xcd && state.gpr[3] == 10,
+                "sthu stores low halfword and writes back updated base");
     EMIT_BE(update_code, 0, D_FORM(33, 3, 3, 0));
     ppu_state_init(&state, update_code, 4, 0);
     ppu_set_memory(&state, memory, sizeof(memory));

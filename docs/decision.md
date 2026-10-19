@@ -15,8 +15,8 @@ Continuar un prototipo independiente de runtime PS3 específico para el juego. *
 
 - Host hardware report: Ryzen 5 3500U (4 cores / 8 threads), Radeon Vega 8, about 10 GB RAM; the supplied Task Manager image showed 92% memory use at that moment.
 - Prior project Vulkan probes reported Vulkan 1.2 on Vega 8 and rendered synthetic output. Offscreen throughput varied strongly with internal resolution. No game code/workload ran.
-- New PPU foundation in `src/Gow3Runtime/ppu/`: a C reference interpreter with only `addi`, `addis`, and `ori`; it uses synthetic instruction bytes, rejects misalignment/out-of-range fetches, and stops on unsupported instructions. This is not a game-compatible CPU.
-- The local Zig 0.15.2 compiler package is incomplete: it fails due to a missing `libc/mingw/math/coshl.c`. A Zig 0.17.0 build attempt did not complete within the initial wait; no successful native artifact or test result is claimed yet.
+- New PPU foundation in `src/Gow3Runtime/ppu/`: a C reference interpreter for a small, explicitly incomplete subset of integer, branch, and memory instructions. ELF mapping and all execution checks use synthetic fixtures; this is not a game-compatible CPU or game loader.
+- The Windows x64 prototype builds with Zig 0.17.0 and currently passes 64 synthetic checks. The earlier Zig 0.15.2 package is incomplete and was not used for that result.
 - Legacy RPCS3 launcher/profile-writer files were removed from the current source tree as part of the standalone pivot; they remain only in Git history.
 - The previously observed ISO was attributed by its adjacent README to a third-party ROM download source. The project will not inspect, extract, decrypt, execute, copy, or move that ISO. No game file is in Git.
 
