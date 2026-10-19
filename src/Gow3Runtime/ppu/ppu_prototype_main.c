@@ -444,6 +444,22 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == (uint32_t)(7u * (uint32_t)-21),
                 "mullw keeps and zero-extends the low 32-bit product");
 
+    static uint8_t high_multiply_code[8];
+    EMIT_BE(high_multiply_code, 0, X_FORM(5, 3, 4, 9, 0));  /* mulhdu */
+    EMIT_BE(high_multiply_code, 1, X_FORM(6, 3, 4, 73, 0)); /* mulhd */
+    ppu_state_init(&state, high_multiply_code, sizeof(high_multiply_code), 0);
+    state.gpr[3] = 0x8000000000000000ull; state.gpr[4] = 2;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[5] == 1,
+                "mulhdu returns the high half of an unsigned 128-bit product");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == UINT64_MAX,
+                "mulhd returns the high half of a signed 128-bit product");
+    ppu_state_init(&state, high_multiply_code, sizeof(high_multiply_code), 0);
+    state.gpr[3] = UINT64_MAX; state.gpr[4] = 3;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[5] == 2,
+                "mulhdu accounts for cross-products between operand halves");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == UINT64_MAX,
+                "mulhd applies signed correction to the unsigned high product");
+
     static uint8_t carry_ops[32];
     EMIT_BE(carry_ops, 0, X_FORM(5, 3, 4, 10, 0));  /* addc */
     EMIT_BE(carry_ops, 1, X_FORM(6, 3, 4, 138, 0)); /* adde */

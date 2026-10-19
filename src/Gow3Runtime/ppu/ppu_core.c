@@ -66,6 +66,18 @@ static uint32_t population_count64(uint64_t value)
     return count;
 }
 
+static uint64_t multiply_high_unsigned(uint64_t left, uint64_t right)
+{
+    const uint64_t left_low = (uint32_t)left;
+    const uint64_t left_high = left >> 32;
+    const uint64_t right_low = (uint32_t)right;
+    const uint64_t right_high = right >> 32;
+    const uint64_t low_product = left_low * right_low;
+    const uint64_t middle = left_high * right_low + (low_product >> 32);
+    const uint64_t upper_middle = left_low * right_high + (middle & 0xffffffffu);
+    return left_high * right_high + (middle >> 32) + (upper_middle >> 32);
+}
+
 static uint64_t double_bits(double value)
 {
     union { double d; uint64_t u; } bits;
@@ -976,6 +988,14 @@ PpuStepResult ppu_step(PpuState *state)
         case 986: result = (uint64_t)(int64_t)(int32_t)state->gpr[ra]; break; /* extsw */
         case 233: result = state->gpr[ra] * state->gpr[rb]; break; /* mulld */
         case 235: result = (uint32_t)state->gpr[ra] * (uint32_t)state->gpr[rb]; break; /* mullw */
+        case 9: result = multiply_high_unsigned(state->gpr[ra], state->gpr[rb]); break; /* mulhdu */
+        case 73: {
+            const uint64_t left = state->gpr[ra], right = state->gpr[rb];
+            result = multiply_high_unsigned(left, right);
+            if ((left >> 63) != 0) result -= right;
+            if ((right >> 63) != 0) result -= left;
+            break;
+        } /* mulhd */
         case 491: { /* divw */
             const int32_t divisor = (int32_t)state->gpr[rb];
             if (divisor == 0) return PPU_STEP_UNSUPPORTED;
