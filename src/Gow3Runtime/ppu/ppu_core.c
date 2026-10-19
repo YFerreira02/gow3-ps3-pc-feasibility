@@ -433,6 +433,36 @@ PpuStepResult ppu_step(PpuState *state)
         const uint32_t xo = (insn >> 1) & 0x3ffu;
         const int record = (insn & 1u) != 0;
         uint64_t result;
+        if (xo == 27u || xo == 539u || xo == 794u) { /* sld / srd / srad */
+            const uint64_t shift_field = state->gpr[rb];
+            const uint32_t shift = (uint32_t)(shift_field & 0x7fu);
+            const uint64_t source = state->gpr[rt];
+            if (xo == 27u)
+                result = (shift_field & ~63ull) != 0 ? 0 : source << shift;
+            else if (xo == 539u)
+                result = (shift_field & ~63ull) != 0 ? 0 : source >> shift;
+            else {
+                const int negative = (source >> 63) != 0;
+                if (shift == 0) {
+                    result = source;
+                    state->xer_ca = 0;
+                } else if (shift >= 64u) {
+                    result = negative ? UINT64_MAX : 0;
+                    state->xer_ca = (uint8_t)negative;
+                } else {
+                    result = source >> shift;
+                    if (negative)
+                        result |= UINT64_MAX << (64u - shift);
+                    const uint64_t discarded = source & ((1ull << shift) - 1ull);
+                    state->xer_ca = (uint8_t)(negative && discarded != 0);
+                }
+            }
+            state->gpr[ra] = result;
+            if (record)
+                set_cr0_from_result(state, result);
+            state->pc += 4;
+            return PPU_STEP_OK;
+        }
         if (xo == 792u || xo == 824u) { /* sraw / srawi */
             const int immediate = xo == 824u;
             const uint32_t shift = immediate ? rb : (uint32_t)state->gpr[rb] & 0x3fu;

@@ -352,6 +352,28 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[9] == 8 && state.xer_ca == 0,
                 "zero-distance srawi clears XER CA");
 
+    uint8_t double_shift_code[20];
+    EMIT_BE(double_shift_code, 0, X_FORM(5, 6, 4, 27, 0));  /* sld */
+    EMIT_BE(double_shift_code, 1, X_FORM(5, 7, 4, 539, 0)); /* srd */
+    EMIT_BE(double_shift_code, 2, X_FORM(5, 8, 4, 794, 0)); /* srad */
+    EMIT_BE(double_shift_code, 3, X_FORM(5, 9, 4, 539, 0)); /* srd shift >=64 */
+    EMIT_BE(double_shift_code, 4, X_FORM(5, 10, 4, 794, 0));/* srad shift >=64 */
+    ppu_state_init(&state, double_shift_code, sizeof(double_shift_code), 0);
+    state.gpr[5] = 0x8000000000000001ull; state.gpr[4] = 1;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == 2,
+                "sld performs a 64-bit logical left shift");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[7] == 0x4000000000000000ull,
+                "srd performs a 64-bit logical right shift");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[8] == 0xc000000000000000ull &&
+                state.xer_ca == 1,
+                "srad sign-fills and records shifted-out negative bits in CA");
+    state.gpr[4] = 64;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[9] == 0,
+                "srd returns zero when the shift amount is at least 64");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[10] == UINT64_MAX &&
+                state.xer_ca == 1,
+                "srad returns the sign fill and sets CA for shifts of 64 or more");
+
     uint8_t multiply[12];
     EMIT_BE(multiply, 0, D_FORM(7, 4, 3, -3));        /* mulli */
     EMIT_BE(multiply, 1, X_FORM(5, 3, 4, 233, 0));   /* mulld */
