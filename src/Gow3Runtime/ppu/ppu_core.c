@@ -36,6 +36,7 @@ void ppu_state_init(PpuState *state, const uint8_t *code, size_t code_size, uint
     state->ctr = 0;
     state->cr = 0;
     state->xer_so = 0;
+    state->xer_ca = 0;
     state->code = code;
     state->code_size = code_size;
     state->code_base = 0;
@@ -425,10 +426,42 @@ PpuStepResult ppu_step(PpuState *state)
             if ((insn & (1u << 10)) != 0) return PPU_STEP_UNSUPPORTED; /* OE */
             result = state->gpr[ra] + state->gpr[rb];
             break;
+        case 10: /* addc */
+        case 138: { /* adde */
+            if ((insn & (1u << 10)) != 0) return PPU_STEP_UNSUPPORTED;
+            const uint64_t carry_in = xo == 138u ? (state->xer_ca & 1u) : 0u;
+            const uint64_t first = state->gpr[ra] + state->gpr[rb];
+            const uint8_t carry_first = first < state->gpr[ra];
+            result = first + carry_in;
+            state->xer_ca = (uint8_t)(carry_first || result < first);
+            break;
+        }
         case 40: /* subf: RB - RA */
             if ((insn & (1u << 10)) != 0) return PPU_STEP_UNSUPPORTED; /* OE */
             result = state->gpr[rb] - state->gpr[ra];
             break;
+        case 8: /* subfc: RB - RA, CA means no borrow */
+            if ((insn & (1u << 10)) != 0) return PPU_STEP_UNSUPPORTED;
+            result = state->gpr[rb] - state->gpr[ra];
+            state->xer_ca = (uint8_t)(state->gpr[rb] >= state->gpr[ra]);
+            break;
+        case 136: { /* subfe: RB - RA - (1 - CA) */
+            if ((insn & (1u << 10)) != 0) return PPU_STEP_UNSUPPORTED;
+            const uint64_t borrow_in = (state->xer_ca & 1u) ? 0u : 1u;
+            const uint64_t first = state->gpr[rb] - state->gpr[ra];
+            const uint8_t borrow_first = state->gpr[rb] < state->gpr[ra];
+            result = first - borrow_in;
+            const uint8_t borrow_second = borrow_in && first == 0;
+            state->xer_ca = (uint8_t)(!borrow_first && !borrow_second);
+            break;
+        }
+        case 202: { /* addze */
+            if ((insn & (1u << 10)) != 0) return PPU_STEP_UNSUPPORTED;
+            const uint64_t carry_in = state->xer_ca & 1u;
+            result = state->gpr[ra] + carry_in;
+            state->xer_ca = (uint8_t)(carry_in && result == 0);
+            break;
+        }
         case 28: result = state->gpr[ra] & state->gpr[rb]; break; /* and */
         case 24: { /* slw */
             const uint64_t shift = state->gpr[rb];

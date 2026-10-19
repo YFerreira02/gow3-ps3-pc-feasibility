@@ -292,6 +292,28 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == (uint32_t)(7u * (uint32_t)-21),
                 "mullw keeps and zero-extends the low 32-bit product");
 
+    uint8_t carry_ops[20];
+    EMIT_BE(carry_ops, 0, X_FORM(5, 3, 4, 10, 0));  /* addc */
+    EMIT_BE(carry_ops, 1, X_FORM(6, 3, 4, 138, 0)); /* adde */
+    EMIT_BE(carry_ops, 2, X_FORM(7, 3, 4, 8, 0));   /* subfc */
+    EMIT_BE(carry_ops, 3, X_FORM(8, 3, 4, 136, 0)); /* subfe */
+    EMIT_BE(carry_ops, 4, X_FORM(9, 3, 0, 202, 0)); /* addze */
+    ppu_state_init(&state, carry_ops, sizeof(carry_ops), 0);
+    state.gpr[3] = UINT64_MAX; state.gpr[4] = 1;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[5] == 0 && state.xer_ca == 1,
+                "addc updates XER carry on unsigned overflow");
+    state.gpr[3] = 5; state.gpr[4] = 6;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == 12 && state.xer_ca == 0,
+                "adde consumes the incoming XER carry");
+    state.gpr[3] = 7; state.gpr[4] = 5;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[7] == (uint64_t)-2 && state.xer_ca == 0,
+                "subfc sets carry to indicate no borrow");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[8] == (uint64_t)-3 && state.xer_ca == 0,
+                "subfe consumes carry as the inverted borrow input");
+    state.xer_ca = 1; state.gpr[3] = UINT64_MAX;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[9] == 0 && state.xer_ca == 1,
+                "addze adds the carry bit to its register operand");
+
     uint8_t spr_code[16];
     EMIT_BE(spr_code, 0, SPR_FORM(4, 8, 339)); /* mflr r4 */
     EMIT_BE(spr_code, 1, SPR_FORM(5, 9, 339)); /* mfctr r5 */

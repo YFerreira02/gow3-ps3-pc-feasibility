@@ -20,6 +20,7 @@ typedef struct PpuState {
     uint64_t ctr;
     uint32_t cr;
     uint8_t xer_so;
+    uint8_t xer_ca;
     const uint8_t *code;
     size_t code_size;
     uint64_t code_base;
