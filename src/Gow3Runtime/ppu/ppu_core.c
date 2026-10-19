@@ -463,6 +463,12 @@ PpuStepResult ppu_step(PpuState *state)
             break;
         }
         case 28: result = state->gpr[ra] & state->gpr[rb]; break; /* and */
+        case 60: result = state->gpr[ra] & ~state->gpr[rb]; break; /* andc */
+        case 124: result = ~(state->gpr[ra] | state->gpr[rb]); break; /* nor */
+        case 284: result = ~(state->gpr[ra] ^ state->gpr[rb]); break; /* eqv */
+        case 412: result = state->gpr[ra] | ~state->gpr[rb]; break; /* orc */
+        case 476: result = ~(state->gpr[ra] & state->gpr[rb]); break; /* nand */
+        case 104: result = 0u - state->gpr[ra]; break; /* neg */
         case 24: { /* slw */
             const uint64_t shift = state->gpr[rb];
             result = (shift & ~31ull) != 0 ? 0 : (uint32_t)state->gpr[ra] << (shift & 31u);
@@ -488,6 +494,32 @@ PpuStepResult ppu_step(PpuState *state)
         case 986: result = (uint64_t)(int64_t)(int32_t)state->gpr[ra]; break; /* extsw */
         case 233: result = state->gpr[ra] * state->gpr[rb]; break; /* mulld */
         case 235: result = (uint32_t)state->gpr[ra] * (uint32_t)state->gpr[rb]; break; /* mullw */
+        case 491: { /* divw */
+            const int32_t divisor = (int32_t)state->gpr[rb];
+            if (divisor == 0) return PPU_STEP_UNSUPPORTED;
+            result = (uint64_t)(int64_t)((int32_t)state->gpr[ra] / divisor);
+            break;
+        }
+        case 459: { /* divwu */
+            const uint32_t divisor = (uint32_t)state->gpr[rb];
+            if (divisor == 0) return PPU_STEP_UNSUPPORTED;
+            result = (uint32_t)state->gpr[ra] / divisor;
+            break;
+        }
+        case 489: { /* divd */
+            const int64_t divisor = (int64_t)state->gpr[rb];
+            const int64_t dividend = (int64_t)state->gpr[ra];
+            if (divisor == 0 || (dividend == INT64_MIN && divisor == -1))
+                return PPU_STEP_UNSUPPORTED;
+            result = (uint64_t)(dividend / divisor);
+            break;
+        }
+        case 457: { /* divdu */
+            if (state->gpr[rb] == 0)
+                return PPU_STEP_UNSUPPORTED;
+            result = state->gpr[ra] / state->gpr[rb];
+            break;
+        }
         case 316: result = state->gpr[ra] ^ state->gpr[rb]; break; /* xor */
         case 444: result = state->gpr[ra] | state->gpr[rb]; break; /* or */
         default: return PPU_STEP_UNSUPPORTED;

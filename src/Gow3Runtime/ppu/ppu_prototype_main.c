@@ -247,6 +247,51 @@ void entry(void)
                 ((state.cr >> 30) & 1u) == 1u,
                 "X-form or record updates CR0");
 
+    uint8_t bit_ops[24];
+    EMIT_BE(bit_ops, 0, X_FORM(5, 3, 4, 60, 0));  /* andc */
+    EMIT_BE(bit_ops, 1, X_FORM(6, 3, 4, 124, 0)); /* nor */
+    EMIT_BE(bit_ops, 2, X_FORM(7, 3, 4, 284, 0)); /* eqv */
+    EMIT_BE(bit_ops, 3, X_FORM(8, 3, 4, 412, 0)); /* orc */
+    EMIT_BE(bit_ops, 4, X_FORM(9, 3, 4, 476, 0)); /* nand */
+    EMIT_BE(bit_ops, 5, X_FORM(10, 3, 0, 104, 0));/* neg */
+    ppu_state_init(&state, bit_ops, sizeof(bit_ops), 0);
+    state.gpr[3] = 0xf0f0; state.gpr[4] = 0x0ff0;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[5] == 0xf000,
+                "andc clears bits selected by the second operand");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == 0xffffffffffff000full,
+                "nor complements the OR result");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[7] == 0xffffffffffff00ffull,
+                "eqv computes bitwise equivalence");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[8] == 0xfffffffffffff0ffull,
+                "orc sets bits not selected by the second operand");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[9] == 0xffffffffffffff0full,
+                "nand complements the AND result");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[10] == 0xffffffffffff0f10ull,
+                "negate operates modulo the 64-bit register width");
+
+    uint8_t divide[16];
+    EMIT_BE(divide, 0, X_FORM(5, 3, 4, 491, 0)); /* divw */
+    EMIT_BE(divide, 1, X_FORM(6, 3, 4, 459, 0)); /* divwu */
+    EMIT_BE(divide, 2, X_FORM(7, 3, 4, 489, 0)); /* divd */
+    EMIT_BE(divide, 3, X_FORM(8, 3, 4, 457, 0)); /* divdu */
+    ppu_state_init(&state, divide, sizeof(divide), 0);
+    state.gpr[3] = 17; state.gpr[4] = (uint64_t)-3;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[5] == (uint64_t)-5,
+                "divw performs signed 32-bit division");
+    state.gpr[3] = 20; state.gpr[4] = 3;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == 6,
+                "divwu performs unsigned 32-bit division");
+    state.gpr[3] = (uint64_t)-100; state.gpr[4] = 7;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[7] == (uint64_t)-14,
+                "divd performs signed 64-bit division");
+    state.gpr[3] = 100; state.gpr[4] = 7;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[8] == 14,
+                "divdu performs unsigned 64-bit division");
+    ppu_state_init(&state, divide, sizeof(divide), 0);
+    state.gpr[3] = 10; state.gpr[4] = 0;
+    ok &= check(ppu_step(&state) == PPU_STEP_UNSUPPORTED && state.pc == 0,
+                "division by zero is rejected without advancing the PPU");
+
     uint8_t word_ops[24];
     EMIT_BE(word_ops, 0, X_FORM(5, 3, 4, 24, 0));  /* slw */
     EMIT_BE(word_ops, 1, X_FORM(6, 3, 4, 536, 0)); /* srw */
