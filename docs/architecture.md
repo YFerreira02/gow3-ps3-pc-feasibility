@@ -11,7 +11,7 @@ La app será un ejecutable propio de Windows y controlará interfaz, entrada, au
 | Component | Responsibility | State / Estado |
 |---|---|---|
 | Windows host | Window, input, audio output, logging, settings, crash handling | Existing synthetic Vulkan probes; no game UI/runtime yet |
-| PPU core | PowerPC 64-bit register/state model, instruction decoding, exceptions, translation blocks | C reference core executes `addi`, `addis`, `ori`, and unconditional `b`; synthetic checks pass |
+| PPU core | PowerPC 64-bit register/state model, instruction decoding, exceptions, translation blocks | C reference core executes `addi`, `addis`, `ori`, `b`, `lwz`, `stw`, and `lbz`; synthetic checks pass |
 | PPU dynarec | Compile verified PPU blocks to x86-64, cache/invalidate, map exceptions | Not started |
 | PS3 services | Threads, virtual memory, filesystem, timers, synchronization, modules used by this title | Not started; requires lawful decrypted executable evidence |
 | SPU runtime | SPU ISA, local store, DMA, mailboxes, events and scheduling | Not started; likely major CPU/performance risk |

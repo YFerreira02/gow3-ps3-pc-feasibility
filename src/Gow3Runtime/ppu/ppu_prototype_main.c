@@ -80,5 +80,36 @@ void entry(void)
     ppu_state_init(&state, branches, sizeof(branches), 8);
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.pc == 0,
                 "absolute branch target");
+
+    uint8_t memory[12] = { 0, 0, 0, 0, 0x12, 0x34, 0x56, 0x78, 0, 0, 0, 0 };
+    uint8_t memory_code[24];
+    EMIT_BE(memory_code, 0, D_FORM(14, 3, 0, 4));      /* addi r3,0,4 */
+    EMIT_BE(memory_code, 1, D_FORM(32, 4, 3, 0));      /* lwz r4,0(r3) */
+    EMIT_BE(memory_code, 2, D_FORM(14, 5, 0, 0x55));   /* addi r5,0,0x55 */
+    EMIT_BE(memory_code, 3, D_FORM(36, 5, 0, 4));      /* stw r5,4(0) */
+    EMIT_BE(memory_code, 4, D_FORM(34, 6, 0, 7));      /* lbz r6,7(0) */
+    ppu_state_init(&state, memory_code, sizeof(memory_code), 0);
+    ppu_set_memory(&state, memory, sizeof(memory));
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && ppu_step(&state) == PPU_STEP_OK &&
+                state.gpr[4] == 0x12345678,
+                "lwz reads a big-endian word from mapped memory");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && ppu_step(&state) == PPU_STEP_OK &&
+                memory[4] == 0 && memory[5] == 0 && memory[6] == 0 && memory[7] == 0x55,
+                "stw writes a big-endian word to mapped memory");
+    const PpuStepResult lbz_result = ppu_step(&state);
+    ok &= check(lbz_result == PPU_STEP_OK, "lbz instruction is supported");
+    ok &= check(state.gpr[6] == 0x55, "lbz reads an unsigned byte");
+
+    EMIT_BE(memory_code, 0, D_FORM(32, 4, 3, 0));
+    ppu_state_init(&state, memory_code, 4, 0);
+    ppu_set_memory(&state, memory, sizeof(memory));
+    state.gpr[3] = sizeof(memory) - 2;
+    ok &= check(ppu_step(&state) == PPU_STEP_MEMORY_FAULT && state.pc == 0,
+                "out-of-range word load faults without advancing PC");
+    ppu_state_init(&state, memory_code, 4, 0);
+    ppu_set_memory(&state, memory, sizeof(memory));
+    state.gpr[3] = 1;
+    ok &= check(ppu_step(&state) == PPU_STEP_MEMORY_FAULT && state.pc == 0,
+                "misaligned word load faults without advancing PC");
     ExitProcess(ok ? 0u : 1u);
 }

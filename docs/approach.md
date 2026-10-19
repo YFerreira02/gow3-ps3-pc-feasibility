@@ -12,7 +12,7 @@ El objetivo es una aplicación Windows 11 que arranque por sí sola y tenga su p
 
 ## Phased gates / Etapas
 
-1. **PPU ISA foundation:** implement a decoder and reference interpreter for documented instructions, with strict bounds/alignment checks and synthetic tests. Current state: `addi`, `addis`, `ori`, and unconditional `b`. Do not claim game compatibility.
+1. **PPU ISA foundation:** implement a decoder and reference interpreter for documented instructions, with strict bounds/alignment checks and synthetic tests. Current state: `addi`, `addis`, `ori`, unconditional `b`, `lwz`, `stw`, and `lbz`. Do not claim game compatibility.
 2. **Native execution:** use profiling to decide whether to build an x86-64 dynamic recompiler for the verified instruction subset. Define invalidation, exceptions, ABI, and memory mapping before executing translated blocks.
 3. **Container and ELF loading:** document a loader for a lawful, user-provided decrypted executable. Do not inspect, copy, extract, decrypt, or execute the third-party ISO previously observed on this PC.
 4. **PS3 services:** identify required imports/syscalls from a lawful executable and implement them one at a time with stubs and tests. No guessed offsets or title patches.
