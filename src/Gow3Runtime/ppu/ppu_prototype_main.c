@@ -100,6 +100,13 @@ void entry(void)
     ok &= check(lbz_result == PPU_STEP_OK, "lbz instruction is supported");
     ok &= check(state.gpr[6] == 0x55, "lbz reads an unsigned byte");
 
+    EMIT_BE(memory_code, 0, D_FORM(38, 7, 0, 2));      /* stb r7,2(0) */
+    ppu_state_init(&state, memory_code, 4, 0);
+    ppu_set_memory(&state, memory, sizeof(memory));
+    state.gpr[7] = 0x1ab;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK, "stb instruction is supported");
+    ok &= check(memory[2] == 0xab, "stb stores the low byte");
+
     EMIT_BE(memory_code, 0, D_FORM(32, 4, 3, 0));
     ppu_state_init(&state, memory_code, 4, 0);
     ppu_set_memory(&state, memory, sizeof(memory));
