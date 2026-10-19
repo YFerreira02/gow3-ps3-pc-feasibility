@@ -37,6 +37,7 @@ The Win32 swapchain path remains unstable on the target AMD driver: FIFO reaches
 
 - [`docs/viability.md`](docs/viability.md): current scope, evidence, risks, and next investigation steps.
 - [`docs/architecture.md`](docs/architecture.md): candidate runtime structure and technical decision points.
+- [`docs/approach.md`](docs/approach.md): compares a custom PS3 runtime with RPCS3 integration and sets the next performance gates.
 - [`docs/decision.md`](docs/decision.md): bilingual go/no-go findings and evidence gates.
 - [`tools/Test-Vulkan12.ps1`](tools/Test-Vulkan12.ps1): dependency-free Windows check that creates a Vulkan 1.2 instance, enumerates adapters, and creates a graphics queue on the preferred adapter.
 - [`tools/Test-VulkanWin32Surface.ps1`](tools/Test-VulkanWin32Surface.ps1): creates a hidden Win32 surface and checks presentation support on the preferred adapter.
