@@ -6,9 +6,9 @@
 
 ## Direction / Dirección
 
-This project aims to build a **standalone Windows app** for the PS3 edition of *God of War III*. **RPCS3 is excluded from the product and runtime path.** The old launcher is historical only and must not be used as the game runner.
+This project aims to build a **standalone Windows app** for the PS3 edition of *God of War III*. **RPCS3 is excluded from the product and runtime path.** There is no RPCS3 launcher or dependency in the current source tree.
 
-Este proyecto busca crear una **app independiente para Windows** para la versión de PS3 de *God of War III*. **RPCS3 queda fuera del producto y de la ruta de ejecución.** El launcher anterior se conserva únicamente como antecedente y no debe usarse para correr el juego.
+Este proyecto busca crear una **app independiente para Windows** para la versión de PS3 de *God of War III*. **RPCS3 queda fuera del producto y de la ruta de ejecución.** El árbol actual no contiene launcher ni dependencia para ese emulador.
 
 “Native” here means a Windows program with its own host UI and renderer, not direct execution of PS3 machine code. The game still needs a PS3 compatibility runtime: PPU/SPU translation, PS3 services, and RSX-to-Vulkan translation. This is a major research effort. Vulkan 1.2 support does not guarantee that the game will run or reach 50–60 FPS. `gow3_pc` targets the PS4 remaster; it informs product organization only and cannot run the PS3 executable.
 
@@ -48,7 +48,6 @@ This uses the local Zig compiler under ignored `work/` to build a native Windows
 - `docs/approach.md`: standalone scope and gates; RPCS3 is excluded.
 - `docs/architecture.md`: component architecture and technical limits.
 - `docs/decision.md`, `docs/viability.md`: recorded measurements and risks.
-- `src/Gow3Launcher/`: superseded RPCS3 launcher code, retained as historical prototype only.
 - `tools/`: Vulkan 1.2 host probes; they contain no game workload.
 
 ## Referenced project and license

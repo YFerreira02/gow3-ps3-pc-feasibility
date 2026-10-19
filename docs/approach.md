@@ -2,9 +2,9 @@
 
 ## Product boundary / Límite del producto
 
-The target is a Windows 11 application that starts independently and contains its own game-specific execution and Vulkan renderer path. RPCS3 is explicitly excluded as a dependency, subprocess, embedded component, benchmark requirement, and fallback. Its old launcher prototype is historical only. The project must not imply that its launcher alone makes the game native.
+The target is a Windows 11 application that starts independently and contains its own game-specific execution and Vulkan renderer path. RPCS3 is explicitly excluded as a dependency, subprocess, embedded component, benchmark requirement, and fallback. Its former launcher and profile-writer sources have been removed from the current tree. The project must not imply that a launcher alone makes the game native.
 
-El objetivo es una aplicación Windows 11 que arranque por sí sola y tenga su propia ruta de ejecución específica y renderer Vulkan. RPCS3 queda expresamente excluido como dependencia, subproceso, componente integrado, requisito de benchmark y alternativa. El launcher anterior es solo histórico. No se debe sugerir que un launcher vuelve nativo al juego.
+El objetivo es una aplicación Windows 11 que arranque por sí sola y tenga su propia ruta de ejecución específica y renderer Vulkan. RPCS3 queda expresamente excluido como dependencia, subproceso, componente integrado, requisito de benchmark y alternativa. Sus fuentes antiguas del launcher y perfiles se quitaron de la rama actual. No se debe sugerir que un launcher vuelve nativo al juego.
 
 “Native PC application” describes the host program and output. PS3 instructions still require translation: Cell PPU and SPU machine code cannot run directly on x86-64. Required PS3 services, memory behavior, synchronization, and RSX command processing must also be implemented. This project will build a purpose-specific compatibility runtime; that is still emulation/translation work, just not RPCS3.
 

@@ -5,9 +5,9 @@
 
 ## Decision / Decisión
 
-Proceed with a standalone, game-specific PS3 runtime prototype. **RPCS3 is not part of the product path.** Do not use the old launcher to boot the game. The product is not playable and the 50–60 FPS goal is unverified.
+Proceed with a standalone, game-specific PS3 runtime prototype. **RPCS3 is not part of the product path.** Its launcher and profile-writer sources have been removed from the current branch. The product is not playable and the 50–60 FPS goal is unverified.
 
-Continuar un prototipo independiente de runtime PS3 específico para el juego. **RPCS3 no forma parte de la ruta del producto.** No usar el launcher anterior para arrancar el juego. El producto no es jugable y la meta de 50–60 FPS no está verificada.
+Continuar un prototipo independiente de runtime PS3 específico para el juego. **RPCS3 no forma parte de la ruta del producto.** Sus fuentes antiguas del launcher y perfiles se quitaron de la rama actual. El producto no es jugable y la meta de 50–60 FPS no está verificada.
 
 “Native” means a Windows program with its own user interface and renderer. It does not mean executing PS3 machine code directly. A standalone runtime still has to translate PPU/SPU instructions and implement PS3 services and RSX behavior. A Windows app and Vulkan 1.2 probe are not evidence that this can meet the target.
 
@@ -17,7 +17,7 @@ Continuar un prototipo independiente de runtime PS3 específico para el juego. *
 - Prior project Vulkan probes reported Vulkan 1.2 on Vega 8 and rendered synthetic output. Offscreen throughput varied strongly with internal resolution. No game code/workload ran.
 - New PPU foundation in `src/Gow3Runtime/ppu/`: a C reference interpreter with only `addi`, `addis`, and `ori`; it uses synthetic instruction bytes, rejects misalignment/out-of-range fetches, and stops on unsupported instructions. This is not a game-compatible CPU.
 - The local Zig 0.15.2 compiler package is incomplete: it fails due to a missing `libc/mingw/math/coshl.c`. A Zig 0.17.0 build attempt did not complete within the initial wait; no successful native artifact or test result is claimed yet.
-- The previous launcher was built around RPCS3. It is now explicitly superseded and excluded from the product.
+- Legacy RPCS3 launcher/profile-writer files were removed from the current source tree as part of the standalone pivot; they remain only in Git history.
 - The previously observed ISO was attributed by its adjacent README to a third-party ROM download source. The project will not inspect, extract, decrypt, execute, copy, or move that ISO. No game file is in Git.
 
 ## Risks and gates / Riesgos y etapas
