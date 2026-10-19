@@ -45,11 +45,12 @@ Lowest engineering risk and best comparison baseline: automate configuration doc
 
 The target requires an average frame budget of 16.7–20 ms at 50–60 FPS, with stable frame pacing. The full game can be limited by CPU translation, SPU scheduling, graphics translation, memory bandwidth, shader compilation, or game logic. Lower internal resolution only helps when GPU fill/render cost is the bottleneck; it will not fix CPU/SPU saturation. The Vega 8 shares system memory and the machine has about 10 GB total, so renderer allocations and cache growth need explicit budgets.
 
-1. Confirm stable Vulkan 1.2 device creation and shader/presentation path on Vega 8; resolve the `amdvlk64.dll` enumeration warning.
-2. Measure a synthetic workload at several internal/output resolutions and log CPU/GPU frame times, memory use, and frame pacing.
-3. Establish a lawful, reproducible way to profile the user's own game dump without putting it in GitHub.
-4. Measure representative title workloads with a proven runtime as a reference; do not treat cutscenes or menus as gameplay performance.
-5. Only claim feasibility for 50–60 FPS if sustained representative scenes meet the budget after shader warm-up and without large recurring stutters.
+1. **Passed:** Vulkan 1.2 instance, physical device, logical graphics device/queue, Win32 surface, and queue presentation support on Vega 8.
+2. **Next:** create a `VK_KHR_swapchain` and present a synthetic frame on Vega 8; resolve the `amdvlk64.dll` enumeration warning if it affects this path.
+3. Measure a synthetic workload at several internal/output resolutions and log CPU/GPU frame times, memory use, and frame pacing.
+4. Establish a lawful, reproducible way to profile the user's own game dump without putting it in GitHub.
+5. Measure representative title workloads with a proven runtime as a reference; do not treat cutscenes or menus as gameplay performance.
+6. Only claim feasibility for 50–60 FPS if sustained representative scenes meet the budget after shader warm-up and without large recurring stutters.
 
 ## Data boundary / Límite de datos
 
@@ -62,3 +63,4 @@ Keep the ISO, extracted files, EBOOT, firmware, keys, game shaders/assets, and t
 - [RPCS3 SPU LLVM recompiler](https://github.com/RPCS3/rpcs3/blob/master/rpcs3/Emu/Cell/SPULLVMRecompiler.cpp)
 - [RPCS3 SELF container parser](https://github.com/RPCS3/rpcs3/blob/master/rpcs3/Crypto/unself.h)
 - [RPCS3 developer information](https://github.com/RPCS3/rpcs3/wiki/developer-information)
+- [Khronos Win32 surface extension](https://registry.khronos.org/vulkan/specs/latest/man/html/VK_KHR_win32_surface.html)
