@@ -31,7 +31,7 @@ The ISO's `PARAM.SFO` identifies title ID `BCES00510`, Europe, application versi
 
 Proceed with a **focused feasibility prototype**, not a promise of a full port. The PC meets the stated Vulkan 1.2 minimum, but 50–60 FPS remains unverified and high risk on this low-power CPU/iGPU. A game-specific Windows application can have a native PC interface and Vulkan renderer, but running the PS3 build still requires CPU/system translation and RSX emulation/translation. See [`docs/architecture.md`](docs/architecture.md) and [`docs/viability.md`](docs/viability.md).
 
-The Vulkan graphics path passes a one-frame smoke test on Vega 8 at 960×540 and 1280×720. Khronos validation helped fix an invalid enum, but still reports a swapchain leak at teardown. Both the original C# probe and a native C cross-check crash on the third swapchain acquire; the native probe now forwards validation warnings/errors through a debug messenger and receives none before the crash. It also crashes at `vkDestroySwapchainKHR` after two successful presents. WER identifies `amdvlk64.dll`, but the native command sequence still needs independent review before assigning cause. This is not a stable renderer or performance result. Output dimensions are configurable, but internal upscaling, game CPU/SPU workload, and the 50–60 FPS target remain untested. See the [decision memo](docs/decision.md).
+The Win32 swapchain path remains unstable on the target AMD driver: FIFO reaches three presents and then times out waiting for another image; immediate mode crashes. A separate Vulkan 1.2 offscreen path avoids the swapchain and copies a synthetic clear to Windows for display. It completed 60 validation-enabled frames at 640×360 internal resolution scaled to a 1280×720 window. Clear/readback throughput ranged from about 49–75 frames/s at that scale across runs, and fell to about 33 at 960×540 and 20 at 1280×720 internal. These are not game FPS measurements: the probe does not run PS3 code, PPU/SPU translation, RSX commands, or game shaders. See the [decision memo](docs/decision.md) and [feasibility report](docs/viability.md).
 
 ## Repository map
 
@@ -45,6 +45,8 @@ The Vulkan graphics path passes a one-frame smoke test on Vega 8 at 960×540 and
 - [`tools/VulkanTriangleProbe.cs`](tools/VulkanTriangleProbe.cs): Vulkan interop and pipeline implementation used by the triangle probe.
 - [`tools/VulkanNativePresentProbe.c`](tools/VulkanNativePresentProbe.c): native C cross-check of Vulkan acquire/clear/present and swapchain teardown, used only for diagnosing the target AMD driver.
 - [`tools/Build-VulkanNativePresentProbe.ps1`](tools/Build-VulkanNativePresentProbe.ps1) and [`tools/Run-VulkanNativePresentProbe.ps1`](tools/Run-VulkanNativePresentProbe.ps1): build and run the native cross-check with an installed Zig compiler and Vulkan SDK.
+- [`tools/VulkanOffscreenPresentProbe.c`](tools/VulkanOffscreenPresentProbe.c): Vulkan 1.2 offscreen clear/readback path that avoids Win32 swapchains.
+- [`tools/Build-VulkanOffscreenProbe.ps1`](tools/Build-VulkanOffscreenProbe.ps1) and [`tools/Run-VulkanOffscreenPresentProbe.ps1`](tools/Run-VulkanOffscreenPresentProbe.ps1): build the offscreen probe and display/scale its output through a Windows window; internal and output dimensions are independent.
 - [`tools/Compile-Shaders.ps1`](tools/Compile-Shaders.ps1): rebuilds the checked-in SPIR-V files from the GLSL sources.
 - `.gitignore`: excludes common disc images, extracted game folders, and game archives from Git.
 
@@ -64,7 +66,7 @@ Este repositorio estudia si sería viable crear un runtime para PC específico p
 
 La primera fase consiste en investigar y hacer una prueba técnica pequeña, de solo lectura, sobre una imagen de disco propia. No ejecuta código del juego, no extrae recursos, no incluye archivos del juego y no promete que un port completo alcance la meta de rendimiento.
 
-La prueba Vulkan de un solo frame funciona en la Vega 8 a 960×540 y 1280×720. La validación Khronos permitió corregir un enum inválido, pero todavía registra una fuga del swapchain al cerrar. Tanto el probe C# como uno en C nativo caen al adquirir la tercera imagen; el probe nativo ahora reenvía avisos/errores de validación mediante un debug messenger y no recibe ninguno antes de caer. También cae en `vkDestroySwapchainKHR` después de dos presentaciones correctas. WER señala `amdvlk64.dll`, aunque la secuencia aún requiere revisión independiente antes de asignar la causa. Todavía no es un renderer estable ni una medición de rendimiento. La resolución de salida es configurable, pero no se ha probado el escalado interno, la carga CPU/SPU del juego ni la meta de 50–60 FPS.
+La ruta de swapchain Win32 sigue inestable con el driver AMD del equipo: FIFO llega a tres presentaciones y luego vence el tiempo al esperar otra imagen; el modo inmediato cae. Una ruta Vulkan 1.2 fuera de pantalla evita el swapchain y copia un clear sintético a Windows para mostrarlo. Completó 60 frames con validación activa a 640×360 interno, escalados a una ventana 1280×720. El rendimiento de clear/copia osciló entre 49 y 75 frames/s en esa escala, y bajó a unos 33 a 960×540 y 20 a 1280×720 internos. No son mediciones del juego: el probe no ejecuta código PS3, traducción PPU/SPU, comandos RSX ni shaders del juego. Consulta el [memo de decisión](docs/decision.md) y el [informe de viabilidad](docs/viability.md).
 
 ### Diferencia técnica clave
 
@@ -77,7 +79,7 @@ La prueba Vulkan de un solo frame funciona en la Vega 8 a 960×540 y 1280×720. 
 - `PS3_GAME\USRDIR\EBOOT.BIN` mide aproximadamente 5.5 MB y comienza con una firma de contenedor `SCE`.
 - La ISO se desmontó después de inspeccionarla. No se extrajeron ni modificaron archivos. Los archivos del juego deben permanecer fuera de este repositorio.
 
-La ruta gráfica pasó sus primeras puertas en la Vega 8: crea un swapchain y un pipeline de shaders, dibuja un triángulo sintético y lo presenta a 960×540 y 1280×720. Es resolución de salida configurable, todavía no escalado de resolución interna. No se ha probado la carga PPU/SPU del juego ni la meta de 50–60 FPS. Consulta el [memo de decisión](docs/decision.md).
+La ruta gráfica pasó sus primeras puertas en la Vega 8: crea un pipeline Vulkan, dibuja un triángulo sintético y admite salida 960×540 y 1280×720. El swapchain Win32 se bloquea tras varias imágenes, así que también se probó la ruta fuera de pantalla con escalado por Windows. La carga PPU/SPU del juego y la meta de 50–60 FPS siguen sin probarse. Consulta el [memo de decisión](docs/decision.md).
 
 Estas observaciones confirman una estructura similar a la de un disco de PS3, pero todavía no identifican el formato descifrado del ejecutable, sus llamadas de sistema requeridas ni la viabilidad del rendimiento.
 

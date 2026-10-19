@@ -25,3 +25,6 @@ work/
 tools/VulkanNativePresentProbe.dll
 tools/VulkanNativePresentProbe.lib
 tools/VulkanNativePresentProbe.pdb
+tools/VulkanOffscreenPresentProbe.dll
+tools/VulkanOffscreenPresentProbe.lib
+tools/VulkanOffscreenPresentProbe.pdb

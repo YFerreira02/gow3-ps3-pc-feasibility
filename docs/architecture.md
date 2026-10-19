@@ -16,7 +16,7 @@ El proyecto debería ser una aplicación de Windows 11 con launcher/configuraci�
 | SPU execution | Translate Cell SPU programs, scheduling, local stores, DMA/mailboxes, synchronization. | Likely a key CPU bottleneck. RPCS3 has an SPU LLVM JIT; a simple interpreter or per-game hacks risk severe performance/compatibility costs. |
 | PS3 service layer | Filesystem, timers, events, audio, controller, save data, shaders, system modules needed by the title. | Must be driven by evidence from the game's own execution and logs; broad system compatibility is not required if the title profile is narrow. |
 | RSX frontend | Consume PS3 graphics command buffers and GPU state; translate shaders, render targets, synchronization, and draw calls. | The most substantial graphics-specific work. Vulkan is the host API; it does not parse/translate RSX commands by itself. |
-| Vulkan backend | Vulkan 1.2 device/swapchain, resource allocation, shader pipeline, presentation, resolution scaling. | Start with a synthetic scene and Vega 8. Avoid mandatory 1.3 features; check limits/extensions and driver behavior at runtime. |
+| Vulkan backend | Vulkan 1.2 device, resource allocation, shader pipeline, offscreen render targets, presentation, resolution scaling. | Start with a synthetic scene and Vega 8. Avoid mandatory 1.3 features; check limits/extensions and driver behavior at runtime. The Win32 swapchain path currently stalls on this AMD driver; an offscreen-to-host-memory output path is a measured fallback, with a substantial resolution-dependent cost. |
 | Diagnostics | Frame-time/CPU-GPU timing, translation cache, memory use, shader cache, compatibility log, crash dumps without game payload. | Essential to determine if a targeted runtime actually improves the user's experience over RPCS3. |
 
 ## How `gow3_pc` informs this project / Qué aporta `gow3_pc`
@@ -39,6 +39,10 @@ Potentially reduces CPU/RSX implementation work, but creates licensing, integrat
 
 Lowest engineering risk and best comparison baseline: automate configuration documentation, title-specific patch discovery, and performance capture around RPCS3. It would not meet the user's “without RPCS3” end goal, but could show whether the current bottleneck is CPU, GPU, memory, or configuration before committing to a new runtime.
 
+### D. Render offscreen with Vulkan and present through Windows
+
+Avoid the failing Vulkan Win32 swapchain by rendering into an optimal-tiled Vulkan image, copying it to a mapped host-visible buffer, and displaying/scaling the pixels through the Windows UI. This path passed a 60-frame validation-enabled synthetic run. At 640×360 internal resolution, the clear/readback/managed-copy path measured roughly 49–75 frames/s when shown at 1280×720 across runs; throughput dropped to about 33 at 960×540 and 20 at 1280×720 internal. This is a diagnostic fallback, not a performance result for the game. A realistic RSX-like workload, display frame pacing, CPU/SPU translation, and memory use could make it too slow.
+
 **Current recommendation:** Prototype the Vulkan 1.2 backend and a non-game synthetic workload first; investigate RPCS3 component reuse in parallel through source/license review. Do not start a full RSX or SPU implementation until these gates are passed.
 
 ## Performance gates / Puertas de rendimiento
@@ -47,10 +51,11 @@ The target requires an average frame budget of 16.7–20 ms at 50–60 FPS, with
 
 1. **Passed:** Vulkan 1.2 instance, physical device, logical graphics device/queue, Win32 surface, queue presentation support, and one cleared swapchain image presented on Vega 8.
 2. **Passed (single-frame smoke test):** basic vertex/fragment shader graphics pipeline and triangle presented at 960×540 and 1280×720. These are output resolutions; an offscreen internal-resolution scaler remains to be built.
-3. **In progress:** Khronos validation helped fix an invalid enum. The hand-written interop and a separate native C probe both fault in the target's AMD Vulkan driver at the third acquire; the native probe also faults at swapchain destruction after two successful presents. The installed device does not enumerate `VK_EXT_swapchain_maintenance1` or `VK_KHR_present_wait`, so a present fence is not currently available. Compare against a maintained native sample and validate presentation completion before building a stable multi-frame workload with independent internal/output resolutions.
-4. Establish a lawful, reproducible way to profile the user's own game dump without putting it in GitHub.
-5. Measure representative title workloads with a proven runtime as a reference; do not treat cutscenes or menus as gameplay performance.
-6. Only claim feasibility for 50–60 FPS if sustained representative scenes meet the budget after shader warm-up and without large recurring stutters.
+3. **Win32 swapchain path blocked:** FIFO with triple buffering presents three frames but times out on the next acquire; immediate mode crashes. Khronos-style semaphore handling and synchronous render-before-present do not resolve it. The driver is implicated, but a universal AMD bug is not proven.
+4. **Offscreen fallback passed (synthetic only):** Vulkan 1.2 renders to an image, copies to host memory, then Windows scales it for display. Continue only if a representative renderer workload and measured display frame pacing retain target performance; otherwise test another driver or host-output path.
+5. Establish a lawful, reproducible way to profile the user's own game dump without putting it in GitHub.
+6. Measure representative title workloads with a proven runtime as a reference; do not treat cutscenes or menus as gameplay performance.
+7. Only claim feasibility for 50–60 FPS if sustained representative scenes meet the budget after shader warm-up and without large recurring stutters.
 
 ## Data boundary / Límite de datos
 
