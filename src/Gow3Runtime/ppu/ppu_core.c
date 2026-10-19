@@ -330,6 +330,16 @@ PpuStepResult ppu_step(PpuState *state)
         const uint32_t frb = (insn >> 11) & 31u;
         if ((insn & 1u) != 0)
             return PPU_STEP_UNSUPPORTED;
+        if (xo10 == 0u || xo10 == 32u) { /* fcmpu / fcmpo */
+            const double left = state->fpr[ra];
+            const double right = state->fpr[frb];
+            if (left != left || right != right)
+                return PPU_STEP_UNSUPPORTED; /* unordered/NaN CR encoding not modeled yet */
+            const uint32_t relation = left < right ? 4u : (left > right ? 2u : 1u);
+            set_cr_field(state, (insn >> 23) & 7u, relation);
+            state->pc += 4;
+            return PPU_STEP_OK;
+        }
         if (xo5 == 21u) state->fpr[rt] = state->fpr[ra] + state->fpr[frb]; /* fadd */
         else if (xo5 == 20u) state->fpr[rt] = state->fpr[ra] - state->fpr[frb]; /* fsub */
         else if (xo5 == 25u) state->fpr[rt] = state->fpr[ra] * state->fpr[(insn >> 6) & 31u]; /* fmul */

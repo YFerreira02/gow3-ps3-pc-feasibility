@@ -391,6 +391,17 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[11] == -3.5,
                 "fnabs sets the FPR sign bit");
 
+    uint8_t fp_compare[8];
+    EMIT_BE(fp_compare, 0, (63u << 26) | (2u << 23) | (1u << 16) | (2u << 11)); /* fcmpu cr2 */
+    EMIT_BE(fp_compare, 1, (63u << 26) | (4u << 23) | (1u << 16) | (2u << 11)); /* fcmpu cr4 */
+    ppu_state_init(&state, fp_compare, sizeof(fp_compare), 0);
+    state.fpr[1] = 1.25; state.fpr[2] = 2.5;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && ((state.cr >> 23) & 1u) == 1u,
+                "fcmpu writes floating-point less-than to selected CR field");
+    state.fpr[1] = state.fpr[2];
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && ((state.cr >> 13) & 1u) == 1u,
+                "fcmpu writes floating-point equality to selected CR field");
+
     uint8_t spr_code[16];
     EMIT_BE(spr_code, 0, SPR_FORM(4, 8, 339)); /* mflr r4 */
     EMIT_BE(spr_code, 1, SPR_FORM(5, 9, 339)); /* mfctr r5 */
