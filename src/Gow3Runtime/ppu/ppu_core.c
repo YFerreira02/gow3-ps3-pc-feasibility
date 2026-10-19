@@ -6,6 +6,26 @@ static uint32_t read_instruction_be(const uint8_t *p)
            ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
+static uint32_t rotate_left_word(uint32_t value, uint32_t shift)
+{
+    shift &= 31u;
+    return shift == 0 ? value : (value << shift) | (value >> (32u - shift));
+}
+
+static uint32_t rotate_mask(uint32_t begin, uint32_t end)
+{
+    uint32_t mask = 0;
+    for (uint32_t bit = 0; bit < 32; ++bit) {
+        const uint32_t ppc_bit = 31u - bit;
+        const int selected = begin <= end
+            ? (ppc_bit >= begin && ppc_bit <= end)
+            : (ppc_bit >= begin || ppc_bit <= end);
+        if (selected)
+            mask |= 1u << bit;
+    }
+    return mask;
+}
+
 void ppu_state_init(PpuState *state, const uint8_t *code, size_t code_size, uint64_t entry_pc)
 {
     if (!state)
@@ -214,6 +234,25 @@ PpuStepResult ppu_step(PpuState *state)
             return PPU_STEP_OK;
         }
         return PPU_STEP_UNSUPPORTED;
+    }
+    case 20: /* rlwimi */
+    case 21: /* rlwinm */
+    case 23: { /* rlwnm */
+        const uint32_t rs = rt;
+        const uint32_t shift_field = (insn >> 11) & 31u;
+        const uint32_t shift = opcode == 23 ? (uint32_t)state->gpr[shift_field] : shift_field;
+        const uint32_t mb = (insn >> 6) & 31u;
+        const uint32_t me = (insn >> 1) & 31u;
+        const uint32_t mask = rotate_mask(mb, me);
+        const uint32_t rotated = rotate_left_word((uint32_t)state->gpr[rs], shift);
+        const uint32_t result = opcode == 20
+            ? (((uint32_t)state->gpr[ra] & ~mask) | (rotated & mask))
+            : (rotated & mask);
+        state->gpr[ra] = result;
+        if ((insn & 1u) != 0)
+            set_cr0_from_result(state, result);
+        state->pc += 4;
+        return PPU_STEP_OK;
     }
     case 31: { /* selected common X-form integer instructions */
         const uint32_t rb = (insn >> 11) & 31u;

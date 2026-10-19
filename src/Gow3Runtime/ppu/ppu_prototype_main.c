@@ -24,6 +24,9 @@ static void put_u64_be(uint8_t *p, uint64_t value)
 #define D_FORM(op, rt, ra, imm) (((uint32_t)(op) << 26) | ((uint32_t)(rt) << 21) | ((uint32_t)(ra) << 16) | (uint16_t)(imm))
 #define X_FORM(rt, ra, rb, xo, rc) ((31u << 26) | ((uint32_t)(rt) << 21) | \
     ((uint32_t)(ra) << 16) | ((uint32_t)(rb) << 11) | ((uint32_t)(xo) << 1) | (rc))
+#define ROT_FORM(op, rs, ra, sh, mb, me, rc) (((uint32_t)(op) << 26) | \
+    ((uint32_t)(rs) << 21) | ((uint32_t)(ra) << 16) | ((uint32_t)(sh) << 11) | \
+    ((uint32_t)(mb) << 6) | ((uint32_t)(me) << 1) | (rc))
 #define EMIT_BE(dst, i, word) do { \
     (dst)[(i) * 4] = (uint8_t)((word) >> 24); \
     (dst)[(i) * 4 + 1] = (uint8_t)((word) >> 16); \
@@ -168,6 +171,22 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[8] == 0 &&
                 ((state.cr >> 29) & 1u) == 1u,
                 "andis. shifts immediate and sets CR0 EQ for zero result");
+
+    uint8_t rotate[12];
+    EMIT_BE(rotate, 0, ROT_FORM(21, 3, 4, 8, 24, 7, 0)); /* rlwinm wrap mask */
+    EMIT_BE(rotate, 1, ROT_FORM(20, 3, 5, 0, 0, 7, 1));  /* rlwimi. */
+    EMIT_BE(rotate, 2, ROT_FORM(23, 3, 6, 7, 0, 31, 0)); /* rlwnm */
+    ppu_state_init(&state, rotate, sizeof(rotate), 0);
+    state.gpr[3] = 0x12345678;
+    state.gpr[5] = 0xaabbccdd;
+    state.gpr[7] = 4;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[4] == 0x34000012,
+                "rlwinm rotates a word and applies a wrapping Power bit mask");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[5] == 0x12bbccdd &&
+                ((state.cr >> 30) & 1u) == 1u,
+                "rlwimi inserts selected rotated bits and records CR0");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == 0x23456781,
+                "rlwnm takes its shift amount from RB");
 
     uint8_t xform[20];
     EMIT_BE(xform, 0, X_FORM(5, 3, 4, 266, 0)); /* add r5,r3,r4 */
