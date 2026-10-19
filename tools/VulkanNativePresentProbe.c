@@ -6,6 +6,18 @@
 
 typedef void (__cdecl *ProbeLog)(const char *message);
 static void report(ProbeLog log, const char *message) { if (log) log(message); }
+static int strings_equal(const char *left, const char *right) {
+    while (*left && *right && *left == *right) { ++left; ++right; }
+    return *left == *right;
+}
+static VKAPI_ATTR VkBool32 VKAPI_CALL validation_callback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+    VkDebugUtilsMessageTypeFlagsEXT type, const VkDebugUtilsMessengerCallbackDataEXT *data, void *user) {
+    (void)type;
+    ProbeLog log = (ProbeLog)user;
+    (void)severity;
+    if (log && data && data->pMessage) log(data->pMessage);
+    return VK_FALSE;
+}
 #define CHECK(call) do { VkResult result_ = (call); if (result_ != VK_SUCCESS) { \
     if (log) log(#call " failed"); goto cleanup; } } while (0)
 
@@ -14,6 +26,8 @@ BOOL WINAPI DllMainCRTStartup(HINSTANCE module, DWORD reason, LPVOID reserved) {
 __declspec(dllexport) int __cdecl RunNativeVulkanProbe(HINSTANCE hinstance, HWND hwnd, uint32_t frame_limit, ProbeLog log) {
     VkInstance instance = VK_NULL_HANDLE; VkSurfaceKHR surface = VK_NULL_HANDLE;
     VkDevice device = VK_NULL_HANDLE; VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+    VkDebugUtilsMessengerEXT debug_messenger = VK_NULL_HANDLE;
+    VkBool32 debug_utils_enabled = VK_FALSE;
     VkCommandPool pool = VK_NULL_HANDLE; VkCommandBuffer command = VK_NULL_HANDLE;
     VkQueue queue = VK_NULL_HANDLE; VkPhysicalDevice physical = VK_NULL_HANDLE;
     VkSemaphore acquire[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
@@ -24,12 +38,34 @@ __declspec(dllexport) int __cdecl RunNativeVulkanProbe(HINSTANCE hinstance, HWND
 
     VkApplicationInfo app = {VK_STRUCTURE_TYPE_APPLICATION_INFO};
     app.pApplicationName = "GOW3 native Vulkan WSI probe"; app.apiVersion = VK_API_VERSION_1_2;
-    const char *instance_extensions[] = {VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME};
+    uint32_t instance_extension_count = 0;
+    VkExtensionProperties available_instance_extensions[128];
+    if (vkEnumerateInstanceExtensionProperties(NULL, &instance_extension_count, NULL) == VK_SUCCESS &&
+        instance_extension_count <= 128 &&
+        vkEnumerateInstanceExtensionProperties(NULL, &instance_extension_count, available_instance_extensions) == VK_SUCCESS) {
+        for (uint32_t i = 0; i < instance_extension_count; ++i)
+            if (strings_equal(available_instance_extensions[i].extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME))
+                debug_utils_enabled = VK_TRUE;
+    }
+    const char *instance_extensions[] = {VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
+        VK_EXT_DEBUG_UTILS_EXTENSION_NAME};
     VkInstanceCreateInfo instance_info = {VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
-    instance_info.pApplicationInfo = &app; instance_info.enabledExtensionCount = 2;
+    instance_info.pApplicationInfo = &app; instance_info.enabledExtensionCount = debug_utils_enabled ? 3 : 2;
     instance_info.ppEnabledExtensionNames = instance_extensions;
     CHECK(vkCreateInstance(&instance_info, NULL, &instance));
     report(log, "Vulkan instance created.");
+    VkDebugUtilsMessengerCreateInfoEXT debug_info = {VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
+    debug_info.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+    debug_info.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+        VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+    debug_info.pfnUserCallback = validation_callback; debug_info.pUserData = (void *)log;
+    PFN_vkCreateDebugUtilsMessengerEXT create_debug_messenger = debug_utils_enabled ?
+        (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT") : NULL;
+    if (create_debug_messenger) {
+        VkResult debug_result = create_debug_messenger(instance, &debug_info, NULL, &debug_messenger);
+        if (debug_result == VK_SUCCESS) report(log, "Vulkan debug messenger enabled.");
+        else report(log, "Vulkan debug messenger unavailable; validation output may be incomplete.");
+    } else report(log, "VK_EXT_debug_utils unavailable; validation output may be incomplete.");
 
     VkWin32SurfaceCreateInfoKHR surface_info = {VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
     surface_info.hinstance = hinstance; surface_info.hwnd = hwnd;
@@ -161,6 +197,11 @@ cleanup:
     report(log, "Cleanup: destroying device and instance.");
     if (device) vkDestroyDevice(device, NULL);
     if (instance && surface) vkDestroySurfaceKHR(instance, surface, NULL);
+    if (instance && debug_messenger) {
+        PFN_vkDestroyDebugUtilsMessengerEXT destroy_debug_messenger =
+            (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT");
+        if (destroy_debug_messenger) destroy_debug_messenger(instance, debug_messenger, NULL);
+    }
     if (instance) vkDestroyInstance(instance, NULL);
     return exit_code;
 }
