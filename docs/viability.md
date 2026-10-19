@@ -93,6 +93,16 @@ Determinar si un runtime para PC específico para la versión de PS3 de *God of 
 9. Reassess CPU, GPU, memory, performance goal, and engineering scope. State what evidence would change the estimate.
 10. Make a go/no-go decision for a playable runtime. Require measured representative gameplay performance before claiming the 50–60 FPS target.
 
+## 6.1 RPCS3 launcher smoke test / Prueba rápida del launcher RPCS3
+
+On 2026-10-19, the Windows x64 launcher was rebuilt from source and opened successfully. The published local package is `work/Gow3Launcher-win-x64.zip`; it contains the launcher and Vulkan probe, not RPCS3, firmware, or game data. Its per-title profile enables the FPS/frame-time overlay and selects Vulkan plus the Vega 8 adapter. The profile writer was separately exercised for initial creation, scale updates, backup behavior, idempotency, and rejection of an out-of-range scale.
+
+A synthetic, asset-free RPCS3 homebrew fixture was attempted to check the next integration step. RPCS3 stopped before boot because no PS3 firmware was installed. Its command line supports `--installfw <path>`, but the official Sony firmware endpoint returned a TLS certificate-name mismatch from this Windows environment, so no download or certificate bypass was used. A later memory snapshot showed about 2.0 GB available out of 9.9 GB. No commercial game executable was launched, and no GOW3 FPS or compatibility result was obtained. Next test: install firmware obtained directly from Sony, rerun the synthetic fixture, then request a lawfully extracted game folder from the user for any title-specific test. Keep firmware and all game data outside Git.
+
+El 2026-10-19 se recompiló el launcher x64 de Windows y se confirmó que abre. El paquete local está en `work/Gow3Launcher-win-x64.zip`; incluye el launcher y el probe Vulkan, pero no RPCS3, firmware ni datos del juego. El perfil por título activa el overlay de FPS/frame time y selecciona Vulkan y la Vega 8. También se probó por separado el escritor del perfil: creación, cambio de escala, respaldo, idempotencia y rechazo de escalas fuera del rango.
+
+Se intentó el siguiente paso de integración con una fixture homebrew sintética y sin recursos del juego. RPCS3 se detuvo antes de arrancar porque no había firmware PS3 instalado. La línea de comandos admite `--installfw <path>`, pero el endpoint oficial de firmware de Sony devolvió desde este Windows un error de nombre de certificado TLS; no se descargó el archivo ni se omitió la validación del certificado. Una medición posterior mostró unos 2,0 GB disponibles de 9,9 GB. No se arrancó ningún ejecutable del juego comercial y no se obtuvo ningún resultado de compatibilidad o FPS de GOW3. Siguiente prueba: instalar firmware obtenido directamente de Sony, repetir la fixture sintética y solicitar una carpeta del juego extraída legalmente para cualquier prueba específica. Firmware y datos del juego deben seguir fuera de Git.
+
 The current evidence-based recommendation is in the [bilingual decision memo](decision.md): proceed with narrow prototypes, but defer a full-port commitment and do not promise 50–60 FPS.
 
 ## 7. Out of scope for phase 1 / Fuera del alcance de la fase 1
