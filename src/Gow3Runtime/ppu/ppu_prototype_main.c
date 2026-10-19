@@ -155,6 +155,19 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && ((state.cr >> 26) & 1u) == 1u,
                 "cmpli sets unsigned greater-than in selected CR field");
 
+    uint8_t reg_compares[8];
+    EMIT_BE(reg_compares, 0, X_FORM((2u << 2), 3, 4, 0, 0));  /* cmpw cr2,r3,r4 */
+    EMIT_BE(reg_compares, 1, X_FORM((3u << 2) | 1u, 5, 6, 32, 0)); /* cmpld cr3,r5,r6 */
+    ppu_state_init(&state, reg_compares, sizeof(reg_compares), 0);
+    state.gpr[3] = UINT64_MAX;
+    state.gpr[4] = 1;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && ((state.cr >> 23) & 1u) == 1u,
+                "cmp compares signed low words into selected CR field");
+    state.gpr[5] = 0x100000000ull;
+    state.gpr[6] = 1;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && ((state.cr >> 18) & 1u) == 1u,
+                "cmpld compares unsigned 64-bit operands");
+
     uint8_t logical[20];
     EMIT_BE(logical, 0, D_FORM(25, 3, 4, 2));
     EMIT_BE(logical, 1, D_FORM(26, 3, 5, 1));

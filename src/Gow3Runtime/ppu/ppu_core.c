@@ -262,6 +262,25 @@ PpuStepResult ppu_step(PpuState *state)
         const uint32_t xo = (insn >> 1) & 0x3ffu;
         const int record = (insn & 1u) != 0;
         uint64_t result;
+        if (xo == 0u || xo == 32u) { /* cmp / cmpl */
+            const uint32_t bf = (insn >> 23) & 7u;
+            const int is_64 = (insn & (1u << 21)) != 0;
+            const uint64_t left = state->gpr[ra];
+            const uint64_t right = state->gpr[rb];
+            uint32_t relation;
+            if (xo == 0u) {
+                const int64_t signed_left = is_64 ? (int64_t)left : (int64_t)(int32_t)(uint32_t)left;
+                const int64_t signed_right = is_64 ? (int64_t)right : (int64_t)(int32_t)(uint32_t)right;
+                relation = signed_left < signed_right ? 4u : (signed_left > signed_right ? 2u : 1u);
+            } else {
+                const uint64_t unsigned_left = is_64 ? left : (uint32_t)left;
+                const uint64_t unsigned_right = is_64 ? right : (uint32_t)right;
+                relation = unsigned_left < unsigned_right ? 4u : (unsigned_left > unsigned_right ? 2u : 1u);
+            }
+            set_cr_field(state, bf, relation);
+            state->pc += 4;
+            return PPU_STEP_OK;
+        }
         if (xo == 339u || xo == 467u) { /* mfspr / mtspr, limited to LR and CTR */
             const uint32_t spr = ((insn >> 16) & 31u) | (((insn >> 11) & 31u) << 5);
             if (record || (spr != 8u && spr != 9u))
