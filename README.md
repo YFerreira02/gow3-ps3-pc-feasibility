@@ -17,7 +17,7 @@ Aquí “nativo” significa un programa de Windows con interfaz y renderer prop
 ## Implemented so far / Implementado hasta ahora
 
 - Windows Vulkan probes: the Vega 8 exposes Vulkan 1.2; synthetic triangle and offscreen display paths have been exercised. These are not game benchmarks.
-- Asset-free PPU interpreter prototype: `addi`, `addis`, `ori`, `cmpi`, `cmpli`, `b`, `bc`, `lwz`, `stw`, `lbz`, and `stb`; it has bounded big-endian memory and virtual-address access. An ELF64 PPC64 parser maps synthetic segments, then the PPU executes synthetic instructions from the ELF entry address. This is not yet a game loader or usable emulator.
+- Asset-free PPU interpreter prototype: `addi`, `addis`, `ori`, `cmpi`, `cmpli`, `b`, `bc`, `bclr`, `bcctr`, `lwz`, `stw`, `lbz`, and `stb`; it has bounded big-endian memory and virtual-address access. An ELF64 PPC64 parser maps synthetic segments, then the PPU executes synthetic instructions from the ELF entry address. This is not yet a game loader or usable emulator.
 - No PS3 executable, ISO, firmware, decryption key, or game asset is in the repository.
 
 ## Next gates / Siguientes etapas

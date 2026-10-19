@@ -117,6 +117,18 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.pc == 8 && state.ctr == 1,
                 "bdnz branches while decremented CTR is nonzero");
 
+    uint8_t indirect[4] = { 0, 0, 0, 0 };
+    EMIT_BE(indirect, 0, (19u << 26) | (20u << 21) | (16u << 1)); /* blr */
+    ppu_state_init(&state, indirect, sizeof(indirect), 0);
+    state.lr = 0x108;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.pc == 0x108,
+                "bclr branches to aligned LR target");
+    EMIT_BE(indirect, 0, (19u << 26) | (20u << 21) | (528u << 1) | 1u); /* bctrl */
+    ppu_state_init(&state, indirect, sizeof(indirect), 0);
+    state.ctr = 0x208;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.pc == 0x208 && state.lr == 4,
+                "bcctrl branches through CTR and records LR");
+
     uint8_t compares[8];
     EMIT_BE(compares, 0, (11u << 26) | (0u << 23) | (1u << 21) | (3u << 16) | 0xffffu);
     ppu_state_init(&state, compares, sizeof(compares), 0);

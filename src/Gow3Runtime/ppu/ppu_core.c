@@ -63,6 +63,20 @@ static void set_cr_field(PpuState *state, uint32_t field_index, uint32_t relatio
     state->cr = (state->cr & ~(0x0fu << shift)) | (value << shift);
 }
 
+static int branch_condition(PpuState *state, uint32_t bo, uint32_t bi, int decrement_ctr)
+{
+    const int bo0 = (bo & 0x10u) != 0;
+    const int bo1 = (bo & 0x08u) != 0;
+    const int bo2 = (bo & 0x04u) != 0;
+    const int bo3 = (bo & 0x02u) != 0;
+    if (decrement_ctr && !bo2)
+        --state->ctr;
+    const int ctr_ok = bo2 || (((state->ctr != 0) ? 1 : 0) ^ bo3);
+    const int cr_bit = (int)((state->cr >> (31u - bi)) & 1u);
+    const int cond_ok = bo0 || (cr_bit == bo1);
+    return ctr_ok && cond_ok;
+}
+
 PpuStepResult ppu_step(PpuState *state)
 {
     if (!state || !state->code || (state->pc & 3u) != 0 || state->pc < state->code_base ||
@@ -134,19 +148,10 @@ PpuStepResult ppu_step(PpuState *state)
         const int64_t signed_bd = (bd & 0x2000u)
             ? (int64_t)bd - 0x4000ll
             : (int64_t)bd;
-        const int bo0 = (bo & 0x10u) != 0;
-        const int bo1 = (bo & 0x08u) != 0;
-        const int bo2 = (bo & 0x04u) != 0;
-        const int bo3 = (bo & 0x02u) != 0;
-        if (!bo2)
-            --state->ctr;
-        const int ctr_ok = bo2 || (((state->ctr != 0) ? 1 : 0) ^ bo3);
-        const int cr_bit = (int)((state->cr >> (31u - bi)) & 1u);
-        const int cond_ok = bo0 || (cr_bit == bo1);
         const uint64_t next_pc = state->pc + 4;
         if ((insn & 1u) != 0)
             state->lr = next_pc;
-        if (ctr_ok && cond_ok) {
+        if (branch_condition(state, bo, bi, 1)) {
             const int64_t displacement = signed_bd * 4;
             state->pc = (insn & 2u) != 0
                 ? (uint64_t)displacement
@@ -155,6 +160,36 @@ PpuStepResult ppu_step(PpuState *state)
             state->pc = next_pc;
         }
         return PPU_STEP_OK;
+    }
+    case 19: { /* XL-form indirect branches */
+        const uint32_t bo = (insn >> 21) & 31u;
+        const uint32_t bi = (insn >> 16) & 31u;
+        const uint32_t xo = (insn >> 1) & 0x3ffu;
+        const uint64_t next_pc = state->pc + 4;
+        if (xo == 16u) { /* bclr */
+            const uint64_t target = state->lr & ~3ull;
+            if ((insn & 1u) != 0)
+                state->lr = next_pc;
+            if (branch_condition(state, bo, bi, 1))
+                state->pc = target;
+            else
+                state->pc = next_pc;
+            return PPU_STEP_OK;
+        }
+        if (xo == 528u) { /* bcctr: CTR cannot be decremented by this form */
+            if ((bo & 4u) == 0)
+                return PPU_STEP_UNSUPPORTED;
+            const uint64_t target = state->ctr & ~3ull;
+            const int bo0 = (bo & 0x10u) != 0;
+            const int bo1 = (bo & 0x08u) != 0;
+            const int cr_bit = (int)((state->cr >> (31u - bi)) & 1u);
+            const int cond_ok = bo0 || (cr_bit == bo1);
+            if ((insn & 1u) != 0)
+                state->lr = next_pc;
+            state->pc = cond_ok ? target : next_pc;
+            return PPU_STEP_OK;
+        }
+        return PPU_STEP_UNSUPPORTED;
     }
     case 32: /* lwz */
         {
