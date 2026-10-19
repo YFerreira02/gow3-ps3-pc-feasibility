@@ -541,6 +541,24 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[26] == 4.0,
                 "frin rounds an odd half tie to the even integer");
 
+    static uint8_t fctiwz_code[8];
+    static uint8_t fctiwz_memory[8];
+    EMIT_BE(fctiwz_code, 0, FP_X(3, 1, 15)); /* fctiwz f3,f1 */
+    EMIT_BE(fctiwz_code, 1, D_FORM(54, 3, 4, 0)); /* stfd f3,0(r4) */
+    ppu_state_init(&state, fctiwz_code, sizeof(fctiwz_code), 0);
+    ppu_set_memory(&state, fctiwz_memory, sizeof(fctiwz_memory));
+    state.gpr[4] = 0; state.fpr[1] = -123.75;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr_integer_word_valid[3] &&
+                state.fpr_integer_word[3] == 0xffffff85,
+                "fctiwz converts toward zero and marks its raw integer-word format");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && fctiwz_memory[4] == 0xff &&
+                fctiwz_memory[7] == 0x85,
+                "stfd preserves the fctiwz word in the low half of FPR storage");
+    ppu_state_init(&state, fctiwz_code, sizeof(fctiwz_code), 0);
+    state.fpr[1] = 2147483648.0;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr_integer_word[3] == 0x7fffffffu,
+                "fctiwz saturates a positive out-of-range input");
+
     static uint8_t fp_compare[16];
     EMIT_BE(fp_compare, 0, (63u << 26) | (2u << 23) | (1u << 16) | (2u << 11)); /* fcmpu cr2 */
     EMIT_BE(fp_compare, 1, (63u << 26) | (4u << 23) | (1u << 16) | (2u << 11)); /* fcmpu cr4 */

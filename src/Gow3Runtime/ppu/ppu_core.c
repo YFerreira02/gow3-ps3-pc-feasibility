@@ -60,6 +60,19 @@ static double double_from_bits(uint64_t value)
     return bits.d;
 }
 
+static void write_fpr_double(PpuState *state, uint32_t reg, double value)
+{
+    state->fpr[reg] = value;
+    state->fpr_integer_word_valid[reg] = 0;
+}
+
+static uint64_t fpr_storage_bits(const PpuState *state, uint32_t reg)
+{
+    return state->fpr_integer_word_valid[reg]
+        ? (uint64_t)state->fpr_integer_word[reg]
+        : double_bits(state->fpr[reg]);
+}
+
 static double round_to_integer(double value, uint32_t mode)
 {
     const uint64_t bits = double_bits(value);
@@ -117,8 +130,11 @@ void ppu_state_init(PpuState *state, const uint8_t *code, size_t code_size, uint
     for (size_t i = 0; i < 32; ++i)
         state->gpr[i] = 0;
     volatile double *fpr = state->fpr;
-    for (size_t i = 0; i < 32; ++i)
+    for (size_t i = 0; i < 32; ++i) {
         fpr[i] = 0.0;
+        state->fpr_integer_word[i] = 0;
+        state->fpr_integer_word_valid[i] = 0;
+    }
     state->lr = 0;
     state->ctr = 0;
     state->cr = 0;
@@ -496,34 +512,49 @@ PpuStepResult ppu_step(PpuState *state)
             return PPU_STEP_OK;
         }
         if (xo10 == 12u) { /* frsp: round to single precision, retain FPR format */
-            state->fpr[rt] = (double)(float)state->fpr[frb];
+            write_fpr_double(state, rt, (double)(float)state->fpr[frb]);
+            state->pc += 4;
+            return PPU_STEP_OK;
+        }
+        if (xo10 == 15u) { /* fctiwz: signed word result occupies low FPR word */
+            const double source = state->fpr[frb];
+            int32_t converted;
+            if (source != source || source < -2147483648.0)
+                converted = INT32_MIN;
+            else if (source > 2147483647.0)
+                converted = INT32_MAX;
+            else
+                converted = (int32_t)source;
+            state->fpr[rt] = (double)converted;
+            state->fpr_integer_word[rt] = (uint32_t)converted;
+            state->fpr_integer_word_valid[rt] = 1;
             state->pc += 4;
             return PPU_STEP_OK;
         }
         if (xo10 == 392u || xo10 == 424u || xo10 == 456u || xo10 == 488u) {
             const uint32_t mode = xo10 == 392u ? 0u : xo10 == 424u ? 1u :
                                   xo10 == 456u ? 2u : 3u;
-            state->fpr[rt] = round_to_integer(state->fpr[frb], mode); /* frin/z/p/m */
+            write_fpr_double(state, rt, round_to_integer(state->fpr[frb], mode)); /* frin/z/p/m */
             state->pc += 4;
             return PPU_STEP_OK;
         }
         if (xo5 == 23u) { /* fsel: choose FRC for nonnegative FRA, otherwise FRB */
             const uint32_t frc = (insn >> 6) & 31u;
-            state->fpr[rt] = state->fpr[ra] >= 0.0 ? state->fpr[frc] : state->fpr[frb];
+            write_fpr_double(state, rt, state->fpr[ra] >= 0.0 ? state->fpr[frc] : state->fpr[frb]);
             state->pc += 4;
             return PPU_STEP_OK;
         }
-        if (xo5 == 21u) state->fpr[rt] = state->fpr[ra] + state->fpr[frb]; /* fadd */
-        else if (xo5 == 20u) state->fpr[rt] = state->fpr[ra] - state->fpr[frb]; /* fsub */
-        else if (xo5 == 25u) state->fpr[rt] = state->fpr[ra] * state->fpr[(insn >> 6) & 31u]; /* fmul */
+        if (xo5 == 21u) write_fpr_double(state, rt, state->fpr[ra] + state->fpr[frb]); /* fadd */
+        else if (xo5 == 20u) write_fpr_double(state, rt, state->fpr[ra] - state->fpr[frb]); /* fsub */
+        else if (xo5 == 25u) write_fpr_double(state, rt, state->fpr[ra] * state->fpr[(insn >> 6) & 31u]); /* fmul */
         else if (xo5 == 18u) {
             const double divisor = state->fpr[frb];
             if (divisor == 0.0) return PPU_STEP_UNSUPPORTED;
-            state->fpr[rt] = state->fpr[ra] / divisor; /* fdiv */
-        } else if (xo10 == 72u) state->fpr[rt] = state->fpr[frb]; /* fmr */
-        else if (xo10 == 264u) state->fpr[rt] = double_from_bits(double_bits(state->fpr[frb]) & 0x7fffffffffffffffull); /* fabs */
-        else if (xo10 == 136u) state->fpr[rt] = double_from_bits(double_bits(state->fpr[frb]) | 0x8000000000000000ull); /* fnabs */
-        else if (xo10 == 40u) state->fpr[rt] = double_from_bits(double_bits(state->fpr[frb]) ^ 0x8000000000000000ull); /* fneg */
+            write_fpr_double(state, rt, state->fpr[ra] / divisor); /* fdiv */
+        } else if (xo10 == 72u) write_fpr_double(state, rt, state->fpr[frb]); /* fmr */
+        else if (xo10 == 264u) write_fpr_double(state, rt, double_from_bits(double_bits(state->fpr[frb]) & 0x7fffffffffffffffull)); /* fabs */
+        else if (xo10 == 136u) write_fpr_double(state, rt, double_from_bits(double_bits(state->fpr[frb]) | 0x8000000000000000ull)); /* fnabs */
+        else if (xo10 == 40u) write_fpr_double(state, rt, double_from_bits(double_bits(state->fpr[frb]) ^ 0x8000000000000000ull)); /* fneg */
         else return PPU_STEP_UNSUPPORTED;
         state->pc += 4;
         return PPU_STEP_OK;
@@ -665,13 +696,13 @@ PpuStepResult ppu_step(PpuState *state)
                 uint64_t value = 0;
                 for (size_t i = 0; i < width; ++i)
                     value = (value << 8) | state->memory[memory_offset + i];
-                state->fpr[rt] = is_single
+                write_fpr_double(state, rt, is_single
                     ? (double)float_from_bits((uint32_t)value)
-                    : double_from_bits(value);
+                    : double_from_bits(value));
             } else {
                 const uint64_t value = is_single
                     ? float_bits((float)state->fpr[rt])
-                    : double_bits(state->fpr[rt]);
+                    : fpr_storage_bits(state, rt);
                 for (size_t i = 0; i < width; ++i)
                     state->memory[memory_offset + i] =
                         (uint8_t)(value >> ((uint32_t)(width - 1u - i) * 8u));
@@ -1083,7 +1114,7 @@ PpuStepResult ppu_step(PpuState *state)
         if (is_store) {
             const uint64_t value = is_single
                 ? float_bits((float)state->fpr[rt])
-                : double_bits(state->fpr[rt]);
+                : fpr_storage_bits(state, rt);
             for (size_t i = 0; i < width; ++i)
                 state->memory[memory_offset + i] =
                     (uint8_t)(value >> ((uint32_t)(width - 1u - i) * 8u));
@@ -1091,9 +1122,9 @@ PpuStepResult ppu_step(PpuState *state)
             uint64_t value = 0;
             for (size_t i = 0; i < width; ++i)
                 value = (value << 8) | state->memory[memory_offset + i];
-            state->fpr[rt] = is_single
+            write_fpr_double(state, rt, is_single
                 ? (double)float_from_bits((uint32_t)value)
-                : double_from_bits(value);
+                : double_from_bits(value));
         }
         if (update)
             state->gpr[ra] = address;
@@ -1145,7 +1176,7 @@ PpuStepResult ppu_step(PpuState *state)
             if (right == 0.0f) return PPU_STEP_UNSUPPORTED;
             value = left / right; /* fdivs */
         } else return PPU_STEP_UNSUPPORTED;
-        state->fpr[rt] = (double)value;
+        write_fpr_double(state, rt, (double)value);
         state->pc += 4;
         return PPU_STEP_OK;
     }
