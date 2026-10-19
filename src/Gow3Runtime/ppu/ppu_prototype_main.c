@@ -290,6 +290,21 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.ctr == 0xdef0,
                 "mtspr writes CTR");
 
+    uint8_t cr_code[12];
+    EMIT_BE(cr_code, 0, X_FORM(4, 0, 0, 19, 0)); /* mfcr r4 */
+    EMIT_BE(cr_code, 1, (31u << 26) | (5u << 21) | (0xffu << 12) | (144u << 1)); /* mtcrf all */
+    EMIT_BE(cr_code, 2, (31u << 26) | (6u << 21) | (0x20u << 12) | (144u << 1)); /* mtcrf CR2 */
+    ppu_state_init(&state, cr_code, sizeof(cr_code), 0);
+    state.cr = 0x12345678;
+    state.gpr[5] = 0x89abcdef;
+    state.gpr[6] = 0x00f00000;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[4] == 0x12345678,
+                "mfcr copies the condition register to a GPR");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.cr == 0x89abcdef,
+                "mtcrf restores all CR fields");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.cr == 0x89fbcdef,
+                "mtcrf updates only the selected CR field");
+
     uint8_t ds_code[20];
     EMIT_BE(ds_code, 0, DS_FORM(58, 5, 3, 0, 0));  /* ld */
     EMIT_BE(ds_code, 1, DS_FORM(58, 6, 3, 8, 2));  /* lwa */

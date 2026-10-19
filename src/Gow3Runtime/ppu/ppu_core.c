@@ -367,6 +367,27 @@ PpuStepResult ppu_step(PpuState *state)
             state->pc += 4;
             return PPU_STEP_OK;
         }
+        if (xo == 19u) { /* mfcr */
+            if (record)
+                return PPU_STEP_UNSUPPORTED;
+            state->gpr[rt] = state->cr;
+            state->pc += 4;
+            return PPU_STEP_OK;
+        }
+        if (xo == 144u) { /* mtcrf */
+            const uint32_t field_mask = (insn >> 12) & 0xffu;
+            if (record || field_mask == 0)
+                return PPU_STEP_UNSUPPORTED;
+            for (uint32_t field = 0; field < 8; ++field) {
+                if ((field_mask & (1u << (7u - field))) != 0) {
+                    const uint32_t shift = 28u - (field * 4u);
+                    const uint32_t mask = 0x0fu << shift;
+                    state->cr = (state->cr & ~mask) | ((uint32_t)state->gpr[rt] & mask);
+                }
+            }
+            state->pc += 4;
+            return PPU_STEP_OK;
+        }
         switch (xo) {
         case 266: /* add */
             if ((insn & (1u << 10)) != 0) return PPU_STEP_UNSUPPORTED; /* OE */
