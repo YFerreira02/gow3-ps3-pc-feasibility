@@ -211,6 +211,31 @@ void entry(void)
     ppu_set_memory(&state, memory, sizeof(memory));
     ok &= check(ppu_step(&state) == PPU_STEP_MEMORY_FAULT && state.pc == 0,
                 "misaligned halfword load faults without advancing PC");
+
+    uint8_t update_code[16];
+    EMIT_BE(update_code, 0, D_FORM(33, 7, 3, 0));  /* lwzu r7,0(r3) */
+    EMIT_BE(update_code, 1, D_FORM(37, 5, 3, 4));  /* stwu r5,4(r3) */
+    EMIT_BE(update_code, 2, D_FORM(35, 8, 3, -4)); /* lbzu r8,-4(r3) */
+    EMIT_BE(update_code, 3, D_FORM(39, 9, 3, 2));  /* stbu r9,2(r3) */
+    memory[4] = 0x12; memory[5] = 0x34; memory[6] = 0x56; memory[7] = 0x78;
+    ppu_state_init(&state, update_code, sizeof(update_code), 0);
+    ppu_set_memory(&state, memory, sizeof(memory));
+    state.gpr[3] = 4;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[7] == 0x12345678 && state.gpr[3] == 4,
+                "lwzu loads and writes back updated base");
+    state.gpr[5] = 0x99;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[3] == 8 && memory[11] == 0x99,
+                "stwu stores and writes back updated base");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[8] == 0x12 && state.gpr[3] == 4,
+                "lbzu loads byte and writes back updated base");
+    state.gpr[9] = 0x1aa;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && memory[6] == 0xaa && state.gpr[3] == 6,
+                "stbu stores byte and writes back updated base");
+    EMIT_BE(update_code, 0, D_FORM(33, 3, 3, 0));
+    ppu_state_init(&state, update_code, 4, 0);
+    ppu_set_memory(&state, memory, sizeof(memory));
+    ok &= check(ppu_step(&state) == PPU_STEP_UNSUPPORTED && state.pc == 0,
+                "lwzu with RT equal to RA is rejected");
     uint8_t memory_code[24];
     EMIT_BE(memory_code, 0, D_FORM(14, 3, 0, 4));      /* addi r3,0,4 */
     EMIT_BE(memory_code, 1, D_FORM(32, 4, 3, 0));      /* lwz r4,0(r3) */

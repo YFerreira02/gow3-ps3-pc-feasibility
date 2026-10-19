@@ -251,11 +251,33 @@ PpuStepResult ppu_step(PpuState *state)
                          (uint32_t)state->memory[memory_offset + 3];
         break;
         }
+    case 33: /* lwzu */
+        {
+        size_t memory_offset;
+        if (ra == 0 || rt == ra) return PPU_STEP_UNSUPPORTED;
+        if ((address & 3u) != 0 || !memory_range_offset(state, address, 4, &memory_offset))
+            return PPU_STEP_MEMORY_FAULT;
+        state->gpr[rt] = ((uint32_t)state->memory[memory_offset] << 24) |
+                         ((uint32_t)state->memory[memory_offset + 1] << 16) |
+                         ((uint32_t)state->memory[memory_offset + 2] << 8) |
+                         (uint32_t)state->memory[memory_offset + 3];
+        state->gpr[ra] = address;
+        break;
+        }
     case 34: /* lbz */
         {
         size_t memory_offset;
         if (!memory_range_offset(state, address, 1, &memory_offset)) return PPU_STEP_MEMORY_FAULT;
         state->gpr[rt] = state->memory[memory_offset];
+        break;
+        }
+    case 35: /* lbzu */
+        {
+        size_t memory_offset;
+        if (ra == 0 || rt == ra) return PPU_STEP_UNSUPPORTED;
+        if (!memory_range_offset(state, address, 1, &memory_offset)) return PPU_STEP_MEMORY_FAULT;
+        state->gpr[rt] = state->memory[memory_offset];
+        state->gpr[ra] = address;
         break;
         }
     case 36: /* stw */
@@ -267,6 +289,19 @@ PpuStepResult ppu_step(PpuState *state)
         state->memory[memory_offset + 1] = (uint8_t)(state->gpr[rt] >> 16);
         state->memory[memory_offset + 2] = (uint8_t)(state->gpr[rt] >> 8);
         state->memory[memory_offset + 3] = (uint8_t)state->gpr[rt];
+        break;
+        }
+    case 37: /* stwu */
+        {
+        size_t memory_offset;
+        if (ra == 0) return PPU_STEP_UNSUPPORTED;
+        if ((address & 3u) != 0 || !memory_range_offset(state, address, 4, &memory_offset))
+            return PPU_STEP_MEMORY_FAULT;
+        state->memory[memory_offset] = (uint8_t)(state->gpr[rt] >> 24);
+        state->memory[memory_offset + 1] = (uint8_t)(state->gpr[rt] >> 16);
+        state->memory[memory_offset + 2] = (uint8_t)(state->gpr[rt] >> 8);
+        state->memory[memory_offset + 3] = (uint8_t)state->gpr[rt];
+        state->gpr[ra] = address;
         break;
         }
     case 40: /* lhz */
@@ -302,6 +337,15 @@ PpuStepResult ppu_step(PpuState *state)
         size_t memory_offset;
         if (!memory_range_offset(state, address, 1, &memory_offset)) return PPU_STEP_MEMORY_FAULT;
         state->memory[memory_offset] = (uint8_t)state->gpr[rt];
+        break;
+        }
+    case 39: /* stbu */
+        {
+        size_t memory_offset;
+        if (ra == 0) return PPU_STEP_UNSUPPORTED;
+        if (!memory_range_offset(state, address, 1, &memory_offset)) return PPU_STEP_MEMORY_FAULT;
+        state->memory[memory_offset] = (uint8_t)state->gpr[rt];
+        state->gpr[ra] = address;
         break;
         }
     default:
