@@ -313,6 +313,34 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[3] == 16 && ds_memory[16] == 0xfe,
                 "stdu writes and updates its base register");
 
+    uint8_t indexed_code[24];
+    EMIT_BE(indexed_code, 0, X_FORM(5, 3, 4, 23, 0));    /* lwzx */
+    EMIT_BE(indexed_code, 1, X_FORM(6, 3, 7, 343, 0));   /* lhax */
+    EMIT_BE(indexed_code, 2, X_FORM(8, 3, 9, 21, 0));    /* ldx */
+    EMIT_BE(indexed_code, 3, X_FORM(10, 3, 11, 151, 0)); /* stwx */
+    EMIT_BE(indexed_code, 4, X_FORM(12, 3, 13, 53, 0));  /* ldux */
+    EMIT_BE(indexed_code, 5, X_FORM(14, 3, 15, 181, 0)); /* stdux */
+    uint8_t indexed_memory[40] = { 0, 0, 0, 0, 0x12, 0x34, 0x56, 0x78,
+                                   0x80, 0x01, 0, 0, 0, 0, 0, 0,
+                                   0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef };
+    ppu_state_init(&state, indexed_code, sizeof(indexed_code), 0);
+    ppu_set_memory(&state, indexed_memory, sizeof(indexed_memory));
+    state.gpr[4] = 4; state.gpr[7] = 8; state.gpr[9] = 16;
+    state.gpr[11] = 24; state.gpr[13] = 16; state.gpr[15] = 16;
+    state.gpr[10] = 0x89abcdefu; state.gpr[14] = 0xfedcba9876543210ull;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[5] == 0x12345678,
+                "lwzx computes RA plus RB and loads a big-endian word");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == (uint64_t)-0x7fff,
+                "lhax sign-extends an indexed halfword");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[8] == 0x0123456789abcdefull,
+                "ldx loads an indexed doubleword");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && indexed_memory[24] == 0x89 && indexed_memory[27] == 0xef,
+                "stwx stores an indexed word");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[12] == 0x0123456789abcdefull && state.gpr[3] == 16,
+                "ldux loads and writes back the effective address");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[3] == 32 && indexed_memory[32] == 0xfe,
+                "stdux stores an indexed doubleword and updates its base");
+
     uint8_t halfword_code[12];
     EMIT_BE(halfword_code, 0, D_FORM(40, 7, 0, 0)); /* lhz r7,0(0) */
     EMIT_BE(halfword_code, 1, D_FORM(42, 8, 0, 0)); /* lha r8,0(0) */

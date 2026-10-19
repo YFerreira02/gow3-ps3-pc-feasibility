@@ -262,6 +262,59 @@ PpuStepResult ppu_step(PpuState *state)
         const uint32_t xo = (insn >> 1) & 0x3ffu;
         const int record = (insn & 1u) != 0;
         uint64_t result;
+        {
+            size_t width = 0;
+            int is_load = 0, update = 0, sign_extend = 0;
+            switch (xo) {
+            case 23: width = 4; is_load = 1; break;  /* lwzx */
+            case 55: width = 4; is_load = 1; update = 1; break; /* lwzux */
+            case 87: width = 1; is_load = 1; break;  /* lbzx */
+            case 119: width = 1; is_load = 1; update = 1; break; /* lbzux */
+            case 279: width = 2; is_load = 1; break; /* lhzx */
+            case 311: width = 2; is_load = 1; update = 1; break; /* lhzux */
+            case 343: width = 2; is_load = 1; sign_extend = 1; break; /* lhax */
+            case 375: width = 2; is_load = 1; update = 1; sign_extend = 1; break; /* lhaux */
+            case 21: width = 8; is_load = 1; break;  /* ldx */
+            case 53: width = 8; is_load = 1; update = 1; break; /* ldux */
+            case 341: width = 4; is_load = 1; sign_extend = 1; break; /* lwax */
+            case 151: width = 4; break;             /* stwx */
+            case 183: width = 4; update = 1; break; /* stwux */
+            case 215: width = 1; break;             /* stbx */
+            case 247: width = 1; update = 1; break; /* stbux */
+            case 407: width = 2; break;             /* sthx */
+            case 439: width = 2; update = 1; break; /* sthux */
+            case 149: width = 8; break;             /* stdx */
+            case 181: width = 8; update = 1; break; /* stdux */
+            default: break;
+            }
+            if (width != 0) {
+                const uint64_t indexed_address = (ra == 0 ? 0 : state->gpr[ra]) + state->gpr[rb];
+                size_t memory_offset;
+                if (record || (update && (ra == 0 || (is_load && rt == ra))))
+                    return PPU_STEP_UNSUPPORTED;
+                if ((indexed_address & (width - 1u)) != 0 ||
+                    !memory_range_offset(state, indexed_address, width, &memory_offset))
+                    return PPU_STEP_MEMORY_FAULT;
+                if (is_load) {
+                    uint64_t loaded = 0;
+                    for (size_t i = 0; i < width; ++i)
+                        loaded = (loaded << 8) | state->memory[memory_offset + i];
+                    if (sign_extend && width == 2)
+                        loaded = (uint64_t)(int64_t)(int16_t)loaded;
+                    else if (sign_extend && width == 4)
+                        loaded = (uint64_t)(int64_t)(int32_t)loaded;
+                    state->gpr[rt] = loaded;
+                } else {
+                    for (size_t i = 0; i < width; ++i)
+                        state->memory[memory_offset + i] =
+                            (uint8_t)(state->gpr[rt] >> ((uint32_t)(width - 1u - i) * 8u));
+                }
+                if (update)
+                    state->gpr[ra] = indexed_address;
+                state->pc += 4;
+                return PPU_STEP_OK;
+            }
+        }
         if (xo == 0u || xo == 32u) { /* cmp / cmpl */
             const uint32_t bf = (insn >> 23) & 7u;
             const int is_64 = (insn & (1u << 21)) != 0;
