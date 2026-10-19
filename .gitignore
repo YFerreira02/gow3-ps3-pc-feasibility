@@ -1,0 +1,23 @@
+# Keep game/disc content out of this repository.
+*.iso
+*.ISO
+*.zip
+*.7z
+*.pkg
+*.psarc
+PS3_GAME/
+PS3_UPDATE/
+PS3_DISC.SFB
+EBOOT.BIN
+PARAM.SFO
+dev_flash/
+firmware/
+
+# Local build and analysis output.
+build/
+dist/
+out/
+*.log
+*.dump
+*.bin
+*.elf
