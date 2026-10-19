@@ -26,7 +26,15 @@ public static class Vulkan12Probe
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     private delegate void GetPhysicalDevicePropertiesDelegate(IntPtr device, IntPtr properties);
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+    private delegate void GetQueueFamilyPropertiesDelegate(IntPtr device, ref uint count, IntPtr properties);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+    private delegate int CreateDeviceDelegate(IntPtr physicalDevice, IntPtr createInfo, IntPtr allocator, out IntPtr device);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+    private delegate void GetDeviceQueueDelegate(IntPtr device, uint family, uint index, out IntPtr queue);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     private delegate void DestroyInstanceDelegate(IntPtr instance, IntPtr allocator);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+    private delegate void DestroyDeviceDelegate(IntPtr device, IntPtr allocator);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct ApplicationInfo
@@ -53,6 +61,32 @@ public static class Vulkan12Probe
         public IntPtr ppEnabledExtensionNames;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DeviceQueueCreateInfo
+    {
+        public int sType;
+        public IntPtr pNext;
+        public uint flags;
+        public uint queueFamilyIndex;
+        public uint queueCount;
+        public IntPtr pQueuePriorities;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DeviceCreateInfo
+    {
+        public int sType;
+        public IntPtr pNext;
+        public uint flags;
+        public uint queueCreateInfoCount;
+        public IntPtr pQueueCreateInfos;
+        public uint enabledLayerCount;
+        public IntPtr ppEnabledLayerNames;
+        public uint enabledExtensionCount;
+        public IntPtr ppEnabledExtensionNames;
+        public IntPtr pEnabledFeatures;
+    }
+
     private static T Load<T>(IntPtr module, string name) where T : class
     {
         IntPtr address = GetProcAddress(module, name);
@@ -67,6 +101,101 @@ public static class Vulkan12Probe
         uint minor = (version >> 12) & 0x3ff;
         uint patch = version & 0xfff;
         return major + "." + minor + "." + patch;
+    }
+
+    private static bool TryCreateGraphicsDevice(IntPtr loader, IntPtr physicalDevice)
+    {
+        var getQueues = Load<GetQueueFamilyPropertiesDelegate>(loader, "vkGetPhysicalDeviceQueueFamilyProperties");
+        uint count = 0;
+        getQueues(physicalDevice, ref count, IntPtr.Zero);
+        if (count == 0)
+        {
+            Console.WriteLine("  Graphics queue: FAIL - no queue families reported.");
+            return false;
+        }
+
+        const int queueFamilyPropertiesSize = 24;
+        IntPtr queueProperties = Marshal.AllocHGlobal(checked((int)count * queueFamilyPropertiesSize));
+        IntPtr queueInfoMemory = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(DeviceQueueCreateInfo)));
+        IntPtr deviceInfoMemory = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(DeviceCreateInfo)));
+        IntPtr priorityMemory = Marshal.AllocHGlobal(sizeof(float));
+        IntPtr logicalDevice = IntPtr.Zero;
+        try
+        {
+            getQueues(physicalDevice, ref count, queueProperties);
+            uint graphicsFamily = UInt32.MaxValue;
+            for (uint i = 0; i < count; ++i)
+            {
+                IntPtr entry = IntPtr.Add(queueProperties, checked((int)i * queueFamilyPropertiesSize));
+                uint flags = unchecked((uint)Marshal.ReadInt32(entry, 0));
+                uint queueCount = unchecked((uint)Marshal.ReadInt32(entry, 4));
+                if ((flags & 0x1) != 0 && queueCount > 0)
+                {
+                    graphicsFamily = i;
+                    break;
+                }
+            }
+
+            if (graphicsFamily == UInt32.MaxValue)
+            {
+                Console.WriteLine("  Graphics queue: FAIL - no graphics-capable queue family.");
+                return false;
+            }
+
+            Marshal.WriteInt32(priorityMemory, BitConverter.ToInt32(BitConverter.GetBytes(1.0f), 0));
+            var queueInfo = new DeviceQueueCreateInfo {
+                sType = 2,
+                pNext = IntPtr.Zero,
+                flags = 0,
+                queueFamilyIndex = graphicsFamily,
+                queueCount = 1,
+                pQueuePriorities = priorityMemory
+            };
+            Marshal.StructureToPtr(queueInfo, queueInfoMemory, false);
+
+            var deviceInfo = new DeviceCreateInfo {
+                sType = 3,
+                pNext = IntPtr.Zero,
+                flags = 0,
+                queueCreateInfoCount = 1,
+                pQueueCreateInfos = queueInfoMemory,
+                enabledLayerCount = 0,
+                ppEnabledLayerNames = IntPtr.Zero,
+                enabledExtensionCount = 0,
+                ppEnabledExtensionNames = IntPtr.Zero,
+                pEnabledFeatures = IntPtr.Zero
+            };
+            Marshal.StructureToPtr(deviceInfo, deviceInfoMemory, false);
+
+            var createDevice = Load<CreateDeviceDelegate>(loader, "vkCreateDevice");
+            int result = createDevice(physicalDevice, deviceInfoMemory, IntPtr.Zero, out logicalDevice);
+            if (result != 0)
+            {
+                Console.WriteLine("  Graphics queue: FAIL - vkCreateDevice returned VkResult " + result + ".");
+                return false;
+            }
+
+            var getDeviceQueue = Load<GetDeviceQueueDelegate>(loader, "vkGetDeviceQueue");
+            IntPtr queue;
+            getDeviceQueue(logicalDevice, graphicsFamily, 0, out queue);
+            if (queue == IntPtr.Zero)
+            {
+                Console.WriteLine("  Graphics queue: FAIL - vkGetDeviceQueue returned a null queue.");
+                return false;
+            }
+
+            Console.WriteLine("  Graphics queue: PASS - logical device created, queue family " + graphicsFamily + ".");
+            return true;
+        }
+        finally
+        {
+            if (logicalDevice != IntPtr.Zero)
+                Load<DestroyDeviceDelegate>(loader, "vkDestroyDevice")(logicalDevice, IntPtr.Zero);
+            Marshal.FreeHGlobal(priorityMemory);
+            Marshal.FreeHGlobal(deviceInfoMemory);
+            Marshal.FreeHGlobal(queueInfoMemory);
+            Marshal.FreeHGlobal(queueProperties);
+        }
     }
 
     public static int Run(string preferredDevice)
@@ -157,13 +286,18 @@ public static class Vulkan12Probe
                     bool has12 = (api >> 22) > 1 || ((api >> 22) == 1 && ((api >> 12) & 0x3ff) >= 2);
                     bool isPreferred = !String.IsNullOrWhiteSpace(preferredDevice) && name.IndexOf(preferredDevice, StringComparison.OrdinalIgnoreCase) >= 0;
                     supported |= has12;
-                    preferredSupported |= has12 && isPreferred;
                     Console.WriteLine("- " + name + " | device API " + ApiVersion(api) + " | type " + type + " | Vulkan 1.2: " + (has12 ? "PASS" : "FAIL"));
+                    if (has12 && (isPreferred || String.IsNullOrWhiteSpace(preferredDevice)))
+                    {
+                        bool queueReady = TryCreateGraphicsDevice(loader, device);
+                        if (isPreferred || String.IsNullOrWhiteSpace(preferredDevice))
+                            preferredSupported |= queueReady;
+                    }
                 }
 
                 if (preferredDevice.Length > 0)
                 {
-                    Console.WriteLine("Preferred device match (\"" + preferredDevice + "\"): " + (preferredSupported ? "PASS" : "NOT FOUND / DOES NOT REPORT 1.2"));
+                    Console.WriteLine("Preferred device Vulkan 1.2 graphics queue (\"" + preferredDevice + "\"): " + (preferredSupported ? "PASS" : "NOT FOUND / FAILED"));
                     if (!preferredSupported)
                     {
                         Console.Error.WriteLine("FAIL: the requested target adapter was not found with Vulkan 1.2 or later.");
@@ -178,7 +312,7 @@ public static class Vulkan12Probe
                 }
 
                 Console.WriteLine("RESULT: PASS - at least one physical device reports Vulkan 1.2 or later.");
-                Console.WriteLine("Note: this checks instance creation and device API versions only; it does not test rendering, swapchain presentation, performance, or game compatibility.");
+                Console.WriteLine("Note: this checks instance creation, device API versions, and graphics-queue creation only; it does not test rendering, swapchain presentation, performance, or game compatibility.");
                 destroy(instance, IntPtr.Zero);
                 instance = IntPtr.Zero;
                 return 0;

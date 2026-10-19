@@ -35,7 +35,7 @@ Proceed with a **focused feasibility prototype**, not a promise of a full port. 
 
 - [`docs/viability.md`](docs/viability.md): current scope, evidence, risks, and next investigation steps.
 - [`docs/architecture.md`](docs/architecture.md): candidate runtime structure and technical decision points.
-- [`tools/Test-Vulkan12.ps1`](tools/Test-Vulkan12.ps1): dependency-free Windows check that creates a Vulkan 1.2 instance and enumerates adapters.
+- [`tools/Test-Vulkan12.ps1`](tools/Test-Vulkan12.ps1): dependency-free Windows check that creates a Vulkan 1.2 instance, enumerates adapters, and creates a graphics queue on the preferred adapter.
 - `.gitignore`: excludes common disc images, extracted game folders, and game archives from Git.
 
 ## License and reuse
