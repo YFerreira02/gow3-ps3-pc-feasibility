@@ -365,7 +365,7 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[9] == 0 && state.xer_ca == 1,
                 "addze adds the carry bit to its register operand");
 
-    uint8_t fp_code[48];
+    uint8_t fp_code[60];
     EMIT_BE(fp_code, 0, FP_A(3, 1, 2, 0, 21)); /* fadd */
     EMIT_BE(fp_code, 1, FP_A(4, 1, 2, 0, 20)); /* fsub */
     EMIT_BE(fp_code, 2, FP_A(5, 1, 0, 2, 25)); /* fmul */
@@ -378,6 +378,9 @@ void entry(void)
     EMIT_BE(fp_code, 9, FP_S(13, 1, 2, 0, 20)); /* fsubs */
     EMIT_BE(fp_code, 10, FP_S(14, 1, 0, 2, 25)); /* fmuls */
     EMIT_BE(fp_code, 11, FP_S(15, 2, 1, 0, 18)); /* fdivs */
+    EMIT_BE(fp_code, 12, FP_X(16, 1, 12)); /* frsp */
+    EMIT_BE(fp_code, 13, FP_A(17, 1, 2, 9, 23)); /* fsel */
+    EMIT_BE(fp_code, 14, FP_A(18, 1, 2, 9, 23)); /* fsel */
     ppu_state_init(&state, fp_code, sizeof(fp_code), 0);
     state.fpr[1] = -1.5; state.fpr[2] = 2.25; state.fpr[9] = -3.5;
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[3] == 0.75,
@@ -404,10 +407,21 @@ void entry(void)
                 "fmuls reads its third single-precision operand from FRC");
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[15] == -1.5,
                 "fdivs divides single-precision FPR operands");
+    state.fpr[1] = 1.0 / 3.0;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[16] == (double)(float)(1.0 / 3.0),
+                "frsp rounds its source to single precision");
+    state.fpr[1] = -1.0; state.fpr[2] = 2.0; state.fpr[9] = 3.0;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[17] == 2.0,
+                "fsel chooses FRB when FRA is negative");
+    state.fpr[1] = 0.0;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[18] == 3.0,
+                "fsel chooses FRC when FRA is zero");
 
-    uint8_t fp_compare[8];
+    uint8_t fp_compare[16];
     EMIT_BE(fp_compare, 0, (63u << 26) | (2u << 23) | (1u << 16) | (2u << 11)); /* fcmpu cr2 */
     EMIT_BE(fp_compare, 1, (63u << 26) | (4u << 23) | (1u << 16) | (2u << 11)); /* fcmpu cr4 */
+    EMIT_BE(fp_compare, 2, (63u << 26) | (5u << 23) | (1u << 16) | (2u << 11)); /* fcmpu cr5 */
+    EMIT_BE(fp_compare, 3, (63u << 26) | (6u << 23) | (1u << 16) | (2u << 11) | (32u << 1)); /* fcmpo cr6 */
     ppu_state_init(&state, fp_compare, sizeof(fp_compare), 0);
     state.fpr[1] = 1.25; state.fpr[2] = 2.5;
     ok &= check(ppu_step(&state) == PPU_STEP_OK && ((state.cr >> 23) & 1u) == 1u,
@@ -415,6 +429,13 @@ void entry(void)
     state.fpr[1] = state.fpr[2];
     ok &= check(ppu_step(&state) == PPU_STEP_OK && ((state.cr >> 13) & 1u) == 1u,
                 "fcmpu writes floating-point equality to selected CR field");
+    union { uint64_t bits; double value; } quiet_nan = { 0x7ff8000000000001ull };
+    state.fpr[1] = quiet_nan.value;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && ((state.cr >> 8) & 0x0fu) == 1u,
+                "fcmpu writes the unordered condition for NaN");
+    state.pc = 12;
+    ok &= check(ppu_step(&state) == PPU_STEP_UNSUPPORTED && state.pc == 12,
+                "fcmpo with NaN is rejected until floating-point exceptions are modeled");
 
     uint8_t fp_memory_code[24];
     EMIT_BE(fp_memory_code, 0, D_FORM(48, 3, 4, 0));  /* lfs */

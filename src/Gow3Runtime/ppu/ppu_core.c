@@ -131,6 +131,12 @@ static void set_cr_field(PpuState *state, uint32_t field_index, uint32_t relatio
     state->cr = (state->cr & ~(0x0fu << shift)) | (value << shift);
 }
 
+static void set_fp_cr_field(PpuState *state, uint32_t field_index, uint32_t fpcc)
+{
+    const uint32_t shift = 28u - (field_index * 4u);
+    state->cr = (state->cr & ~(0x0fu << shift)) | ((fpcc & 0x0fu) << shift);
+}
+
 static void set_cr0_from_result(PpuState *state, uint64_t result)
 {
     const int64_t signed_result = (int64_t)result;
@@ -347,10 +353,26 @@ PpuStepResult ppu_step(PpuState *state)
         if (xo10 == 0u || xo10 == 32u) { /* fcmpu / fcmpo */
             const double left = state->fpr[ra];
             const double right = state->fpr[frb];
-            if (left != left || right != right)
-                return PPU_STEP_UNSUPPORTED; /* unordered/NaN CR encoding not modeled yet */
-            const uint32_t relation = left < right ? 4u : (left > right ? 2u : 1u);
-            set_cr_field(state, (insn >> 23) & 7u, relation);
+            const uint32_t field = (insn >> 23) & 7u;
+            if (left != left || right != right) {
+                if (xo10 == 32u)
+                    return PPU_STEP_UNSUPPORTED; /* fcmpo raises an FP exception on NaN */
+                set_fp_cr_field(state, field, 1u); /* unordered */
+            } else {
+                const uint32_t fpcc = left < right ? 8u : (left > right ? 4u : 2u);
+                set_fp_cr_field(state, field, fpcc);
+            }
+            state->pc += 4;
+            return PPU_STEP_OK;
+        }
+        if (xo10 == 12u) { /* frsp: round to single precision, retain FPR format */
+            state->fpr[rt] = (double)(float)state->fpr[frb];
+            state->pc += 4;
+            return PPU_STEP_OK;
+        }
+        if (xo5 == 23u) { /* fsel: choose FRC for nonnegative FRA, otherwise FRB */
+            const uint32_t frc = (insn >> 6) & 31u;
+            state->fpr[rt] = state->fpr[ra] >= 0.0 ? state->fpr[frc] : state->fpr[frb];
             state->pc += 4;
             return PPU_STEP_OK;
         }
