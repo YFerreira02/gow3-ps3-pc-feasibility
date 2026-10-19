@@ -46,6 +46,26 @@ static uint64_t rotate_mask_doubleword(uint32_t begin, uint32_t end)
     return mask;
 }
 
+static uint32_t population_count32(uint32_t value)
+{
+    uint32_t count = 0;
+    while (value != 0) {
+        value &= value - 1u;
+        ++count;
+    }
+    return count;
+}
+
+static uint32_t population_count64(uint64_t value)
+{
+    uint32_t count = 0;
+    while (value != 0) {
+        value &= value - 1ull;
+        ++count;
+    }
+    return count;
+}
+
 static uint64_t double_bits(double value)
 {
     union { double d; uint64_t u; } bits;
@@ -931,6 +951,26 @@ PpuStepResult ppu_step(PpuState *state)
             result = count;
             break;
         }
+        case 58: { /* cntlzd */
+            uint64_t value = state->gpr[ra];
+            uint32_t count = 0;
+            while (count < 64u && (value & 0x8000000000000000ull) == 0) {
+                ++count;
+                value <<= 1;
+            }
+            result = count;
+            break;
+        }
+        case 122: { /* popcntb: count set bits independently in every byte */
+            result = 0;
+            for (uint32_t byte = 0; byte < 8u; ++byte) {
+                const uint32_t count = population_count32((uint32_t)(state->gpr[ra] >> (byte * 8u)) & 0xffu);
+                result |= (uint64_t)count << (byte * 8u);
+            }
+            break;
+        }
+        case 378: result = population_count32((uint32_t)state->gpr[ra]); break; /* popcntw */
+        case 506: result = population_count64(state->gpr[ra]); break; /* popcntd */
         case 954: result = (uint64_t)(int64_t)(int8_t)state->gpr[ra]; break; /* extsb */
         case 922: result = (uint64_t)(int64_t)(int16_t)state->gpr[ra]; break; /* extsh */
         case 986: result = (uint64_t)(int64_t)(int32_t)state->gpr[ra]; break; /* extsw */

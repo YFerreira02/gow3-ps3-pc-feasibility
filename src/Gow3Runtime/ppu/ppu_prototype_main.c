@@ -370,6 +370,23 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[10] == (uint64_t)(int64_t)(int32_t)0x80000001u,
                 "extsw sign-extends the low word");
 
+    static uint8_t bit_count_code[16];
+    EMIT_BE(bit_count_code, 0, X_FORM(5, 3, 0, 58, 0));  /* cntlzd */
+    EMIT_BE(bit_count_code, 1, X_FORM(6, 4, 0, 122, 0)); /* popcntb */
+    EMIT_BE(bit_count_code, 2, X_FORM(7, 4, 0, 378, 0)); /* popcntw */
+    EMIT_BE(bit_count_code, 3, X_FORM(8, 4, 0, 506, 0)); /* popcntd */
+    ppu_state_init(&state, bit_count_code, sizeof(bit_count_code), 0);
+    state.gpr[3] = 0x0000000100000000ull;
+    state.gpr[4] = 0x01020304ff000001ull;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[5] == 31,
+                "cntlzd counts leading zeros in a 64-bit register");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == 0x0101020108000001ull,
+                "popcntb counts set bits independently in each byte");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[7] == 9,
+                "popcntw counts set bits in the low word");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[8] == 14,
+                "popcntd counts set bits in the full doubleword");
+
     static uint8_t arithmetic_shift_code[16];
     EMIT_BE(arithmetic_shift_code, 0, X_FORM(5, 6, 2, 824, 0)); /* srawi */
     EMIT_BE(arithmetic_shift_code, 1, X_FORM(5, 7, 4, 792, 0)); /* sraw */
