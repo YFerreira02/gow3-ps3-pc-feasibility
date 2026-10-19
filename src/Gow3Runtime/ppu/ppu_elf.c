@@ -82,12 +82,17 @@ PpuElfResult ppu_elf_load_segments(const uint8_t *file, size_t file_size,
         const PpuElfSegment *segment = &view->segments[i];
         if (segment->virtual_address < guest_base ||
             !range_fits(segment->file_offset, segment->file_size, file_size) ||
-            segment->file_size > segment->memory_size)
+            segment->file_size > segment->memory_size ||
+            segment->virtual_address > UINT64_MAX - segment->memory_size)
             return PPU_ELF_BOUNDS_ERROR;
         const uint64_t memory_offset = segment->virtual_address - guest_base;
         if (!range_fits(memory_offset, segment->memory_size, memory_size))
             return PPU_ELF_BOUNDS_ERROR;
+    }
 
+    for (uint16_t i = 0; i < view->segment_count; ++i) {
+        const PpuElfSegment *segment = &view->segments[i];
+        const uint64_t memory_offset = segment->virtual_address - guest_base;
         uint8_t *destination = memory + (size_t)memory_offset;
         const uint8_t *source = file + (size_t)segment->file_offset;
         for (uint64_t byte = 0; byte < segment->file_size; ++byte)

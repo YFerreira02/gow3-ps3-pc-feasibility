@@ -793,6 +793,23 @@ void entry(void)
     ok &= check(ppu_elf_load_segments(elf, sizeof(elf), &view, 0x10000,
                                       guest_memory, sizeof(guest_memory) - 1) == PPU_ELF_BOUNDS_ERROR,
                 "ELF segment outside guest memory rejected");
+    view.segment_count = 2;
+    view.segments[1].flags = view.segments[0].flags;
+    view.segments[1].file_offset = view.segments[0].file_offset;
+    view.segments[1].virtual_address = 0x10010;
+    view.segments[1].file_size = view.segments[0].file_size;
+    view.segments[1].memory_size = view.segments[0].memory_size;
+    uint8_t unchanged_memory[12];
+    for (size_t i = 0; i < sizeof(unchanged_memory); ++i) unchanged_memory[i] = 0x5a;
+    ok &= check(ppu_elf_load_segments(elf, sizeof(elf), &view, 0x10000,
+                                      unchanged_memory, sizeof(unchanged_memory)) == PPU_ELF_BOUNDS_ERROR,
+                "ELF later segment outside guest memory rejected during prevalidation");
+    int memory_unchanged = 1;
+    for (size_t i = 0; i < sizeof(unchanged_memory); ++i)
+        if (unchanged_memory[i] != 0x5a) memory_unchanged = 0;
+    ok &= check(memory_unchanged,
+                "invalid ELF segment leaves guest memory completely unchanged");
+    view.segment_count = 1;
     uint8_t program_elf[140];
     for (size_t i = 0; i < sizeof(elf); ++i) program_elf[i] = elf[i];
     put_u64_be(program_elf + 96, 20);
