@@ -60,6 +60,42 @@ static double double_from_bits(uint64_t value)
     return bits.d;
 }
 
+static double round_to_integer(double value, uint32_t mode)
+{
+    const uint64_t bits = double_bits(value);
+    const uint64_t sign = bits & 0x8000000000000000ull;
+    const uint64_t magnitude = bits & 0x7fffffffffffffffull;
+    const uint32_t exponent = (uint32_t)((magnitude >> 52) & 0x7ffu);
+    if (exponent == 0x7ffu || magnitude == 0)
+        return value;
+    const int32_t unbiased = (int32_t)exponent - 1023;
+    if (unbiased >= 52)
+        return value;
+    if (unbiased < 0) {
+        int round_away = 0;
+        if (mode == 2u) round_away = sign == 0; /* toward +infinity */
+        else if (mode == 3u) round_away = sign != 0; /* toward -infinity */
+        else if (mode == 0u && unbiased == -1 && (magnitude & 0x000fffffffffffffull) != 0)
+            round_away = 1; /* nearest, ties to even */
+        return double_from_bits(sign | (round_away ? 0x3ff0000000000000ull : 0));
+    }
+    const uint32_t fractional_bits = 52u - (uint32_t)unbiased;
+    const uint64_t fraction_mask = (1ull << fractional_bits) - 1ull;
+    const uint64_t remainder = magnitude & fraction_mask;
+    if (remainder == 0)
+        return value;
+    int increment = mode == 2u ? sign == 0 : mode == 3u ? sign != 0 : 0;
+    if (mode == 0u) {
+        const uint64_t halfway = 1ull << (fractional_bits - 1u);
+        increment = remainder > halfway ||
+            (remainder == halfway && ((magnitude >> fractional_bits) & 1u) != 0);
+    }
+    uint64_t rounded = magnitude & ~fraction_mask;
+    if (increment)
+        rounded += 1ull << fractional_bits;
+    return double_from_bits(sign | rounded);
+}
+
 static uint32_t float_bits(float value)
 {
     union { float f; uint32_t u; } bits;
@@ -461,6 +497,13 @@ PpuStepResult ppu_step(PpuState *state)
         }
         if (xo10 == 12u) { /* frsp: round to single precision, retain FPR format */
             state->fpr[rt] = (double)(float)state->fpr[frb];
+            state->pc += 4;
+            return PPU_STEP_OK;
+        }
+        if (xo10 == 392u || xo10 == 424u || xo10 == 456u || xo10 == 488u) {
+            const uint32_t mode = xo10 == 392u ? 0u : xo10 == 424u ? 1u :
+                                  xo10 == 456u ? 2u : 3u;
+            state->fpr[rt] = round_to_integer(state->fpr[frb], mode); /* frin/z/p/m */
             state->pc += 4;
             return PPU_STEP_OK;
         }

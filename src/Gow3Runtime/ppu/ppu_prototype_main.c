@@ -461,7 +461,7 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[12] == (uint64_t)-2 && state.xer_ca == 1,
                 "subfme subtracts from minus one with correct carry-out");
 
-    static uint8_t fp_code[60];
+    static uint8_t fp_code[92];
     EMIT_BE(fp_code, 0, FP_A(3, 1, 2, 0, 21)); /* fadd */
     EMIT_BE(fp_code, 1, FP_A(4, 1, 2, 0, 20)); /* fsub */
     EMIT_BE(fp_code, 2, FP_A(5, 1, 0, 2, 25)); /* fmul */
@@ -477,6 +477,14 @@ void entry(void)
     EMIT_BE(fp_code, 12, FP_X(16, 1, 12)); /* frsp */
     EMIT_BE(fp_code, 13, FP_A(17, 1, 2, 9, 23)); /* fsel */
     EMIT_BE(fp_code, 14, FP_A(18, 1, 2, 9, 23)); /* fsel */
+    EMIT_BE(fp_code, 15, FP_X(19, 1, 392)); /* frin */
+    EMIT_BE(fp_code, 16, FP_X(20, 1, 424)); /* friz */
+    EMIT_BE(fp_code, 17, FP_X(21, 1, 456)); /* frip */
+    EMIT_BE(fp_code, 18, FP_X(22, 1, 488)); /* frim */
+    EMIT_BE(fp_code, 19, FP_X(23, 1, 456)); /* frip negative */
+    EMIT_BE(fp_code, 20, FP_X(24, 1, 488)); /* frim negative */
+    EMIT_BE(fp_code, 21, FP_X(25, 1, 392)); /* frin tie to even */
+    EMIT_BE(fp_code, 22, FP_X(26, 1, 392)); /* frin tie to even */
     ppu_state_init(&state, fp_code, sizeof(fp_code), 0);
     state.fpr[1] = -1.5; state.fpr[2] = 2.25; state.fpr[9] = -3.5;
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[3] == 0.75,
@@ -512,6 +520,26 @@ void entry(void)
     state.fpr[1] = 0.0;
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[18] == 3.0,
                 "fsel chooses FRC when FRA is zero");
+    state.fpr[1] = 1.25;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[19] == 1.0,
+                "frin rounds to nearest integer");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[20] == 1.0,
+                "friz rounds toward zero");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[21] == 2.0,
+                "frip rounds toward positive infinity");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[22] == 1.0,
+                "frim rounds positive values toward negative infinity");
+    state.fpr[1] = -1.25;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[23] == -1.0,
+                "frip rounds negative values toward positive infinity");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[24] == -2.0,
+                "frim rounds negative values toward negative infinity");
+    state.fpr[1] = 2.5;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[25] == 2.0,
+                "frin breaks an exact half tie toward the even integer");
+    state.fpr[1] = 3.5;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[26] == 4.0,
+                "frin rounds an odd half tie to the even integer");
 
     static uint8_t fp_compare[16];
     EMIT_BE(fp_compare, 0, (63u << 26) | (2u << 23) | (1u << 16) | (2u << 11)); /* fcmpu cr2 */
