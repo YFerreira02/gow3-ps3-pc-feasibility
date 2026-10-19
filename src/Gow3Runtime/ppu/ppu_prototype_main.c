@@ -89,6 +89,18 @@ void entry(void)
     state.gpr[11] = 0x123;
     ok &= check(ppu_step(&state) == PPU_STEP_SYSCALL && state.pc == 4 && state.gpr[11] == 0x123,
                 "sc advances to the return PC and yields to the PS3 service dispatcher");
+    ppu_state_init(&state, syscall_code, sizeof(syscall_code), 0);
+    uint64_t executed = 0;
+    ok &= check(ppu_run(&state, 1, &executed) == PPU_STEP_SYSCALL && executed == 1,
+                "bounded PPU runner stops at the syscall handoff");
+
+    uint8_t loop_code[8];
+    EMIT_BE(loop_code, 0, D_FORM(14, 3, 3, 1));
+    EMIT_BE(loop_code, 1, (18u << 26) | (0x00ffffffu << 2)); /* b -4 */
+    ppu_state_init(&state, loop_code, sizeof(loop_code), 0);
+    ok &= check(ppu_run(&state, 10, &executed) == PPU_STEP_LIMIT_REACHED &&
+                executed == 10 && state.gpr[3] == 5 && state.pc == 0,
+                "bounded PPU runner yields after exactly the instruction budget");
 
     uint8_t branches[12];
     EMIT_BE(branches, 0, (18u << 26) | (2u << 2));

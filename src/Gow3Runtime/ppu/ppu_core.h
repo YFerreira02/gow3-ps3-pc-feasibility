@@ -9,7 +9,8 @@ typedef enum PpuStepResult {
     PPU_STEP_UNSUPPORTED = 1,
     PPU_STEP_BAD_ARGUMENT = 2,
     PPU_STEP_MEMORY_FAULT = 3,
-    PPU_STEP_SYSCALL = 4
+    PPU_STEP_SYSCALL = 4,
+    PPU_STEP_LIMIT_REACHED = 5
 } PpuStepResult;
 
 typedef struct PpuState {
@@ -32,5 +33,6 @@ void ppu_set_code_base(PpuState *state, uint64_t code_base);
 void ppu_set_memory(PpuState *state, uint8_t *memory, size_t memory_size);
 void ppu_set_memory_at(PpuState *state, uint8_t *memory, size_t memory_size, uint64_t guest_base);
 PpuStepResult ppu_step(PpuState *state);
+PpuStepResult ppu_run(PpuState *state, uint64_t instruction_budget, uint64_t *executed);
 
 #endif

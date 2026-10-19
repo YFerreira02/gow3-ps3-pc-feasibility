@@ -660,3 +660,26 @@ PpuStepResult ppu_step(PpuState *state)
     state->pc += 4;
     return PPU_STEP_OK;
 }
+
+PpuStepResult ppu_run(PpuState *state, uint64_t instruction_budget, uint64_t *executed)
+{
+    uint64_t count = 0;
+    if (executed)
+        *executed = 0;
+    if (!state || instruction_budget == 0)
+        return PPU_STEP_BAD_ARGUMENT;
+    while (count < instruction_budget) {
+        const PpuStepResult result = ppu_step(state);
+        if (result != PPU_STEP_OK && result != PPU_STEP_SYSCALL) {
+            if (executed) *executed = count;
+            return result;
+        }
+        ++count;
+        if (result == PPU_STEP_SYSCALL) {
+            if (executed) *executed = count;
+            return result;
+        }
+    }
+    if (executed) *executed = count;
+    return PPU_STEP_LIMIT_REACHED;
+}
