@@ -142,6 +142,9 @@ PpuStepResult ppu_step(PpuState *state)
         set_cr_field(state, bf, relation);
         break;
     }
+    case 7: /* mulli: modulo-64-bit product by signed immediate */
+        state->gpr[rt] = state->gpr[ra] * (uint64_t)signed_imm;
+        break;
     case 14: /* addi */
         state->gpr[rt] = base + (uint64_t)signed_imm;
         break;
@@ -305,6 +308,8 @@ PpuStepResult ppu_step(PpuState *state)
         case 954: result = (uint64_t)(int64_t)(int8_t)state->gpr[ra]; break; /* extsb */
         case 922: result = (uint64_t)(int64_t)(int16_t)state->gpr[ra]; break; /* extsh */
         case 986: result = (uint64_t)(int64_t)(int32_t)state->gpr[ra]; break; /* extsw */
+        case 233: result = state->gpr[ra] * state->gpr[rb]; break; /* mulld */
+        case 235: result = (uint32_t)state->gpr[ra] * (uint32_t)state->gpr[rb]; break; /* mullw */
         case 316: result = state->gpr[ra] ^ state->gpr[rb]; break; /* xor */
         case 444: result = state->gpr[ra] | state->gpr[rb]; break; /* or */
         default: return PPU_STEP_UNSUPPORTED;

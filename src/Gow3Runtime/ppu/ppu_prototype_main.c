@@ -245,6 +245,19 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[10] == (uint64_t)(int64_t)(int32_t)0x80000001u,
                 "extsw sign-extends the low word");
 
+    uint8_t multiply[12];
+    EMIT_BE(multiply, 0, D_FORM(7, 4, 3, -3));        /* mulli */
+    EMIT_BE(multiply, 1, X_FORM(5, 3, 4, 233, 0));   /* mulld */
+    EMIT_BE(multiply, 2, X_FORM(6, 3, 4, 235, 0));   /* mullw */
+    ppu_state_init(&state, multiply, sizeof(multiply), 0);
+    state.gpr[3] = 7;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[4] == (uint64_t)-21,
+                "mulli multiplies by a signed immediate");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[5] == (uint64_t)-147,
+                "mulld keeps the low 64 bits of the product");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == (uint32_t)(7u * (uint32_t)-21),
+                "mullw keeps and zero-extends the low 32-bit product");
+
     uint8_t spr_code[16];
     EMIT_BE(spr_code, 0, SPR_FORM(4, 8, 339)); /* mflr r4 */
     EMIT_BE(spr_code, 1, SPR_FORM(5, 9, 339)); /* mfctr r5 */
