@@ -8,7 +8,7 @@
 
 This repository studies whether a game-specific PC runtime for the **PlayStation 3 edition** of *God of War III* could be feasible on the reference PC. The design takes inspiration from the game-specific runtime, launcher, configuration, and patch workflow of [`gow3_pc`](https://github.com/FelipePrado0/gow3_pc), while recognizing that the PS3 edition requires a different execution and graphics path.
 
-The first phase is research and a small, read-only technical probe of a user-owned PS3 disc image. It does not execute game code, extract game assets, include game files, or claim that a full port will reach the performance target.
+The project is a feasibility study with local Vulkan probes and a read-only metadata check of the user's own PS3 disc image. The probes do not execute game code or extract game assets. They do not include game files or claim that a full port will reach the performance target.
 
 ## Key technical distinction
 
@@ -23,7 +23,7 @@ The first phase is research and a small, read-only technical probe of a user-own
 
 These observations confirm a PS3-disc-like structure, but do not yet identify the executable's decrypted format, enumerate its required system calls, or establish performance feasibility.
 
-The local PC was also inspected read-only. Windows reports build 26300.9711 (Windows 11 26H2); the Ryzen 5 3500U has 4 cores / 8 threads and the system has about 9.9 GB RAM. `vulkaninfo` reports Vulkan 1.2.170 on both the Vega 8 and Radeon 530. The Vega 8 exposes the checked Vulkan 1.2 features recorded in the feasibility report. This verifies the API floor on paper, not game compatibility or speed. The AMD Vulkan tool emitted an ICD warning during enumeration; see the report for the caveat.
+The local PC was also inspected read-only. Windows reports build 26300.9711 (Windows 11 26H2); the Ryzen 5 3500U has 4 cores / 8 threads and the system has about 9.9 GB RAM. `vulkaninfo` reports Vulkan 1.2.170 on both the Vega 8 and Radeon 530. The Vega 8 exposes the checked Vulkan 1.2 features recorded in the feasibility report. Project-owned probes then successfully created a Vulkan 1.2 graphics device, a Win32 surface, a swapchain, and presented a synthetic clear-color frame on Vega 8. This verifies a basic host rendering path, not game compatibility or speed. `vulkaninfo` emitted an ICD warning during enumeration; see the report for the caveat.
 
 The ISO's `PARAM.SFO` identifies title ID `BCES00510`, Europe, application version `01.00`, and disc version `01.03`. These identifiers help constrain later compatibility research; no game payload is stored here.
 
@@ -31,12 +31,15 @@ The ISO's `PARAM.SFO` identifies title ID `BCES00510`, Europe, application versi
 
 Proceed with a **focused feasibility prototype**, not a promise of a full port. The PC meets the stated Vulkan 1.2 minimum, but 50–60 FPS remains unverified and high risk on this low-power CPU/iGPU. A game-specific Windows application can have a native PC interface and Vulkan renderer, but running the PS3 build still requires CPU/system translation and RSX emulation/translation. See [`docs/architecture.md`](docs/architecture.md) and [`docs/viability.md`](docs/viability.md).
 
+The first Vulkan graphics gate has passed on Vega 8: a single swapchain image was acquired, cleared, and presented. The next gate is a shader-backed synthetic scene with adjustable internal resolution and frame-time/memory measurements. The game CPU/SPU workload and 50–60 FPS target remain untested.
+
 ## Repository map
 
 - [`docs/viability.md`](docs/viability.md): current scope, evidence, risks, and next investigation steps.
 - [`docs/architecture.md`](docs/architecture.md): candidate runtime structure and technical decision points.
 - [`tools/Test-Vulkan12.ps1`](tools/Test-Vulkan12.ps1): dependency-free Windows check that creates a Vulkan 1.2 instance, enumerates adapters, and creates a graphics queue on the preferred adapter.
 - [`tools/Test-VulkanWin32Surface.ps1`](tools/Test-VulkanWin32Surface.ps1): creates a hidden Win32 surface and checks presentation support on the preferred adapter.
+- [`tools/Test-VulkanSwapchain.ps1`](tools/Test-VulkanSwapchain.ps1): creates a hidden Win32 surface and Vulkan swapchain, clears one image, and presents it.
 - `.gitignore`: excludes common disc images, extracted game folders, and game archives from Git.
 
 ## License and reuse
@@ -55,6 +58,8 @@ Este repositorio estudia si sería viable crear un runtime para PC específico p
 
 La primera fase consiste en investigar y hacer una prueba técnica pequeña, de solo lectura, sobre una imagen de disco propia. No ejecuta código del juego, no extrae recursos, no incluye archivos del juego y no promete que un port completo alcance la meta de rendimiento.
 
+Las pruebas Vulkan locales ahora crean un dispositivo gráfico Vulkan 1.2, una superficie Win32 y un swapchain, limpian una imagen y presentan un frame sintético en la Vega 8. Esto valida la ruta básica de presentación del PC, no el juego ni su rendimiento.
+
 ### Diferencia técnica clave
 
 `gow3_pc` está dirigido a la remasterización de PS4. El código original del juego es x86-64 y la ruta gráfica usa el renderer Vulkan de shadPS4. La versión de PS3 tiene otra arquitectura de CPU/GPU y otra interfaz de sistema. El ejecutable, las cargas de SPU, los comandos de RSX y los servicios de PS3 no funcionan directamente con ese runtime de PS4. Un esfuerzo para PS3 necesitaría su propia traducción/runtime; Vulkan 1.2 es un mínimo para la API gráfica, no una garantía de compatibilidad o rendimiento.
@@ -65,6 +70,8 @@ La primera fase consiste en investigar y hacer una prueba técnica pequeña, de 
 - Al montarla temporalmente en modo de solo lectura se observó un volumen UDF llamado `PS3VOLUME`, con `PS3_GAME`, `PS3_UPDATE` y `PS3_DISC.SFB` en la raíz.
 - `PS3_GAME\USRDIR\EBOOT.BIN` mide aproximadamente 5.5 MB y comienza con una firma de contenedor `SCE`.
 - La ISO se desmontó después de inspeccionarla. No se extrajeron ni modificaron archivos. Los archivos del juego deben permanecer fuera de este repositorio.
+
+La primera puerta gráfica pasó en la Vega 8: el sondeo obtuvo una imagen del swapchain, la limpió y la presentó. La siguiente puerta es una escena sintética con shaders, resolución interna ajustable y mediciones de tiempos y memoria. Todavía no se ha probado la carga PPU/SPU del juego ni la meta de 50–60 FPS.
 
 Estas observaciones confirman una estructura similar a la de un disco de PS3, pero todavía no identifican el formato descifrado del ejecutable, sus llamadas de sistema requeridas ni la viabilidad del rendimiento.
 

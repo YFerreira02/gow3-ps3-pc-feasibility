@@ -40,7 +40,9 @@ Determinar si un runtime para PC específico para la versión de PS3 de *God of 
 - Feature spot-check on Vega 8: `bufferDeviceAddress`, `scalarBlockLayout`, `separateDepthStencilLayouts`, `shaderFloat16`, `shaderInt8`, `timelineSemaphore`, `descriptorIndexing`, `samplerFilterMinmax`, and `vulkanMemoryModel` report true. Radeon 530 reports false for `shaderFloat16`; Vega 8 is the intended initial adapter.
 - `vulkaninfo` also printed an AMD `amdvlk64.dll` ICD `vkCreateInstance` warning (-13) and surface capability warnings while enumerating the devices. Device API support was reported, but the warning should be diagnosed in the prototype and must not be hidden from the final compatibility report.
 - A project-owned PowerShell/C# interop probe now creates a Vulkan 1.2 instance through `vulkan-1.dll`, enumerates physical devices, reads their device API versions, and creates/destroys a logical device plus graphics queue on the requested adapter. It ran successfully on this PC: Vega 8 and Radeon 530 both returned `1.2.170`, and the Vega 8 graphics queue passed. This independent instance-creation path did not prevent usable adapter enumeration. The probe intentionally does not create a window/swapchain, render shaders, measure FPS, or validate any game behavior.
-- A second probe created a hidden Win32 window handle, enabled `VK_KHR_surface` and `VK_KHR_win32_surface`, created a Vulkan surface, and checked presentation support. On this PC, Vega 8 surface creation passed and graphics queue family 0 can present to that surface. This reduces uncertainty about the Windows/Vulkan presentation path, but no swapchain or pixels were created.
+- A second probe created a hidden Win32 window handle, enabled `VK_KHR_surface` and `VK_KHR_win32_surface`, created a Vulkan surface, and checked presentation support. On this PC, Vega 8 surface creation passed and graphics queue family 0 can present to that surface.
+- A third probe created a logical device with `VK_KHR_swapchain`, selected FIFO presentation, created a swapchain at 304x141 for the temporary hidden window, acquired one image, transitioned it to transfer-destination layout, cleared it, transitioned it to present layout, submitted the command buffer, and presented it. The full path returned success on Vega 8. This validates basic Vulkan image presentation, not shaders, resizing, sustained frame pacing, the game renderer, or performance.
+- The custom Vulkan instance/surface/swapchain probes did not reproduce the `amdvlk64.dll` warning printed by `vulkaninfo`; they succeeded on the selected Vega 8 adapter. Keep the `vulkaninfo` warning in the record because it may correspond to another ICD path and has not been fully diagnosed.
 - Read-only in-memory `PARAM.SFO` parse: title `God of War III`, title ID `BCES00510`, app version `01.00`, disc version `01.03`, required system version `03.1500`, category `DG`. The ISO was dismounted after the parse.
 - Public RPCS3 compatibility data has listed `BCES00510` as `Ingame` in a dated snapshot, which is a warning about known compatibility/performance gaps, not a current definitive verdict. Compatibility status can change with emulator revisions. See [RPCS3's compatibility page](https://rpcs3.net/compatibility?g=BCAS25003&o=4d&type=1) and its [status definitions](https://rpcs3.net/compatibility).
 
@@ -70,12 +72,13 @@ Determinar si un runtime para PC específico para la versión de PS3 de *God of 
 ## 6. Proposed investigation sequence / Secuencia propuesta
 
 1. **Complete:** record hardware, Windows build, drivers, Vulkan device API/feature spot-check, and disc identifiers without extracting files.
-2. **Next:** extend the Win32 probe to create and present a swapchain, then draw a synthetic clear-color frame on Vega 8. Investigate the `vulkaninfo` ICD warning, then test shader compilation, memory budget, and adjustable internal resolution with a synthetic scene. Do not run the game yet.
-3. Map documented PPU/SPU/RSX requirements and the RPCS3 architecture to a game-specific runtime boundary; identify what can be reused under its license and what is proprietary game behavior.
-4. Determine a lawful analysis path for the user's own dump and define a metadata-only report. Do not add executable contents, keys, firmware, or assets to Git.
-5. Only after the renderer and toolchain are stable, define a small CPU/SPU translation experiment and a separate RSX workload estimate.
-6. Reassess CPU, GPU, memory, performance goal, and engineering scope. State what evidence would change the estimate.
-7. Make a go/no-go decision for a playable runtime. Require measured representative gameplay performance before claiming the 50–60 FPS target.
+2. **Complete:** create and present a synthetic clear-color swapchain frame on Vega 8.
+3. **Next:** build a shader-backed synthetic scene with adjustable internal resolution; measure CPU/GPU frame time, frame pacing, and memory. Investigate the `vulkaninfo` ICD warning if it affects the selected path. Do not run the game yet.
+4. Map documented PPU/SPU/RSX requirements and the RPCS3 architecture to a game-specific runtime boundary; identify what can be reused under its license and what is proprietary game behavior.
+5. Determine a lawful analysis path for the user's own dump and define a metadata-only report. Do not add executable contents, keys, firmware, or assets to Git.
+6. Only after the renderer and toolchain are stable, define a small CPU/SPU translation experiment and a separate RSX workload estimate.
+7. Reassess CPU, GPU, memory, performance goal, and engineering scope. State what evidence would change the estimate.
+8. Make a go/no-go decision for a playable runtime. Require measured representative gameplay performance before claiming the 50–60 FPS target.
 
 ## 7. Out of scope for phase 1 / Fuera del alcance de la fase 1
 
@@ -93,9 +96,10 @@ To rerun the local capability probe from the repository root in Windows PowerShe
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-Vulkan12.ps1 -PreferDevice "Vega 8"
 powershell -STA -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-VulkanWin32Surface.ps1 -PreferDevice "Vega 8"
+powershell -STA -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-VulkanSwapchain.ps1 -PreferDevice "Vega 8"
 ```
 
-These probes do not need the Vulkan SDK or a compiler installation; Windows PowerShell compiles small interop declarations at runtime. Exit code 0 from the first means instance creation, Vulkan 1.2 API reporting, and logical-device/graphics-queue creation passed. Exit code 0 from the second means Win32 surface creation and graphics-queue presentation support passed on the requested adapter. The second test does not yet create a swapchain or render pixels; neither is a game test.
+These probes do not need the Vulkan SDK or a compiler installation; Windows PowerShell compiles small interop declarations at runtime. The first checks Vulkan 1.2 API and graphics-queue creation. The second checks Win32 surface and presentation support. The third creates a swapchain and presents one cleared image. They do not test shader pipelines, resolution scaling, game compatibility, or sustained performance.
 
 - Reference project: [`FelipePrado0/gow3_pc`](https://github.com/FelipePrado0/gow3_pc)
 - Reference README: [`gow3_pc` README](https://github.com/FelipePrado0/gow3_pc#readme)
