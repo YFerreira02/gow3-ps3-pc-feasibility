@@ -17,6 +17,7 @@ firmware/
 build/
 dist/
 out/
+work/
 *.log
 *.dump
 *.bin

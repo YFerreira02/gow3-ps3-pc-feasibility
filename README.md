@@ -31,15 +31,19 @@ The ISO's `PARAM.SFO` identifies title ID `BCES00510`, Europe, application versi
 
 Proceed with a **focused feasibility prototype**, not a promise of a full port. The PC meets the stated Vulkan 1.2 minimum, but 50–60 FPS remains unverified and high risk on this low-power CPU/iGPU. A game-specific Windows application can have a native PC interface and Vulkan renderer, but running the PS3 build still requires CPU/system translation and RSX emulation/translation. See [`docs/architecture.md`](docs/architecture.md) and [`docs/viability.md`](docs/viability.md).
 
-The first Vulkan graphics gate has passed on Vega 8: a single swapchain image was acquired, cleared, and presented. The next gate is a shader-backed synthetic scene with adjustable internal resolution and frame-time/memory measurements. The game CPU/SPU workload and 50–60 FPS target remain untested.
+The Vulkan graphics path has passed its initial gates on Vega 8: it creates a swapchain and shader pipeline, renders a synthetic triangle, and presents it at 960×540 and 1280×720. This is configurable output resolution, not internal upscaling. The game CPU/SPU workload and 50–60 FPS target remain untested. See the [decision memo](docs/decision.md).
 
 ## Repository map
 
 - [`docs/viability.md`](docs/viability.md): current scope, evidence, risks, and next investigation steps.
 - [`docs/architecture.md`](docs/architecture.md): candidate runtime structure and technical decision points.
+- [`docs/decision.md`](docs/decision.md): bilingual go/no-go findings and evidence gates.
 - [`tools/Test-Vulkan12.ps1`](tools/Test-Vulkan12.ps1): dependency-free Windows check that creates a Vulkan 1.2 instance, enumerates adapters, and creates a graphics queue on the preferred adapter.
 - [`tools/Test-VulkanWin32Surface.ps1`](tools/Test-VulkanWin32Surface.ps1): creates a hidden Win32 surface and checks presentation support on the preferred adapter.
 - [`tools/Test-VulkanSwapchain.ps1`](tools/Test-VulkanSwapchain.ps1): creates a hidden Win32 surface and Vulkan swapchain, clears one image, and presents it.
+- [`tools/Test-VulkanTriangle.ps1`](tools/Test-VulkanTriangle.ps1): creates a shader pipeline, draws a synthetic triangle, and accepts configurable swapchain dimensions.
+- [`tools/VulkanTriangleProbe.cs`](tools/VulkanTriangleProbe.cs): Vulkan interop and pipeline implementation used by the triangle probe.
+- [`tools/Compile-Shaders.ps1`](tools/Compile-Shaders.ps1): rebuilds the checked-in SPIR-V files from the GLSL sources.
 - `.gitignore`: excludes common disc images, extracted game folders, and game archives from Git.
 
 ## License and reuse
@@ -71,7 +75,7 @@ Las pruebas Vulkan locales ahora crean un dispositivo gráfico Vulkan 1.2, una s
 - `PS3_GAME\USRDIR\EBOOT.BIN` mide aproximadamente 5.5 MB y comienza con una firma de contenedor `SCE`.
 - La ISO se desmontó después de inspeccionarla. No se extrajeron ni modificaron archivos. Los archivos del juego deben permanecer fuera de este repositorio.
 
-La primera puerta gráfica pasó en la Vega 8: el sondeo obtuvo una imagen del swapchain, la limpió y la presentó. La siguiente puerta es una escena sintética con shaders, resolución interna ajustable y mediciones de tiempos y memoria. Todavía no se ha probado la carga PPU/SPU del juego ni la meta de 50–60 FPS.
+La ruta gráfica pasó sus primeras puertas en la Vega 8: crea un swapchain y un pipeline de shaders, dibuja un triángulo sintético y lo presenta a 960×540 y 1280×720. Es resolución de salida configurable, todavía no escalado de resolución interna. No se ha probado la carga PPU/SPU del juego ni la meta de 50–60 FPS. Consulta el [memo de decisión](docs/decision.md).
 
 Estas observaciones confirman una estructura similar a la de un disco de PS3, pero todavía no identifican el formato descifrado del ejecutable, sus llamadas de sistema requeridas ni la viabilidad del rendimiento.
 

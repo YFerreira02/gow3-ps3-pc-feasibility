@@ -42,9 +42,13 @@ Determinar si un runtime para PC específico para la versión de PS3 de *God of 
 - A project-owned PowerShell/C# interop probe now creates a Vulkan 1.2 instance through `vulkan-1.dll`, enumerates physical devices, reads their device API versions, and creates/destroys a logical device plus graphics queue on the requested adapter. It ran successfully on this PC: Vega 8 and Radeon 530 both returned `1.2.170`, and the Vega 8 graphics queue passed. This independent instance-creation path did not prevent usable adapter enumeration. The probe intentionally does not create a window/swapchain, render shaders, measure FPS, or validate any game behavior.
 - A second probe created a hidden Win32 window handle, enabled `VK_KHR_surface` and `VK_KHR_win32_surface`, created a Vulkan surface, and checked presentation support. On this PC, Vega 8 surface creation passed and graphics queue family 0 can present to that surface.
 - A third probe created a logical device with `VK_KHR_swapchain`, selected FIFO presentation, created a swapchain at 304x141 for the temporary hidden window, acquired one image, transitioned it to transfer-destination layout, cleared it, transitioned it to present layout, submitted the command buffer, and presented it. The full path returned success on Vega 8. This validates basic Vulkan image presentation, not shaders, resizing, sustained frame pacing, the game renderer, or performance.
+- The shader-backed follow-on compiled a small vertex/fragment pair to SPIR-V targeting Vulkan 1.2, created shader modules and a graphics pipeline, rendered a triangle to a color-attachment swapchain, and presented it on Vega 8. It returned exit code 0 at both 960x540 and 1280x720. This is a one-frame API/pipeline smoke test only; its workload is not a performance proxy for the game.
+- Cleanup limitation: on this AMD setup, explicitly destroying the just-presented swapchain caused the probe process to terminate abnormally. The short-lived probe therefore tears down its device/process without an explicit swapchain-destroy call. This is a prototype-only workaround, not an acceptable lifecycle for a production renderer; investigate WSI/presentation completion and validate with Vulkan validation layers before building a long-running application.
+- The same shader pipeline also returned success with a 1280x720 swapchain. `-Width` and `-Height` therefore control output/swapchain resolution in the probe. An independent offscreen/internal render scale is not implemented yet.
 - The custom Vulkan instance/surface/swapchain probes did not reproduce the `amdvlk64.dll` warning printed by `vulkaninfo`; they succeeded on the selected Vega 8 adapter. Keep the `vulkaninfo` warning in the record because it may correspond to another ICD path and has not been fully diagnosed.
 - Read-only in-memory `PARAM.SFO` parse: title `God of War III`, title ID `BCES00510`, app version `01.00`, disc version `01.03`, required system version `03.1500`, category `DG`. The ISO was dismounted after the parse.
-- Public RPCS3 compatibility data has listed `BCES00510` as `Ingame` in a dated snapshot, which is a warning about known compatibility/performance gaps, not a current definitive verdict. Compatibility status can change with emulator revisions. See [RPCS3's compatibility page](https://rpcs3.net/compatibility?g=BCAS25003&o=4d&type=1) and its [status definitions](https://rpcs3.net/compatibility).
+- Public RPCS3 compatibility data lists `BCES00510` as `Ingame`, updated 2025-03-14 in the observed snapshot. RPCS3 defines that status as serious glitches, inability to finish, or insufficient performance. Treat it as a compatibility/performance warning, not a measurement on this PC or a permanent verdict. See [RPCS3's compatibility page](https://rpcs3.net/compatibility?g=BCAS25003&o=4d&type=1) and its [status definitions](https://rpcs3.net/compatibility).
+- An RPCS3 issue for this exact title documents stutter reports and CPU/SPURS scheduling observations on other hardware. This is anecdotal, but reinforces that a graphics-only Vulkan prototype cannot answer the main CPU risk. See [RPCS3 issue #16909](https://github.com/RPCS3/rpcs3/issues/16909).
 
 ## 4. Main feasibility questions / Preguntas principales
 
@@ -73,12 +77,15 @@ Determinar si un runtime para PC específico para la versión de PS3 de *God of 
 
 1. **Complete:** record hardware, Windows build, drivers, Vulkan device API/feature spot-check, and disc identifiers without extracting files.
 2. **Complete:** create and present a synthetic clear-color swapchain frame on Vega 8.
-3. **Next:** build a shader-backed synthetic scene with adjustable internal resolution; measure CPU/GPU frame time, frame pacing, and memory. Investigate the `vulkaninfo` ICD warning if it affects the selected path. Do not run the game yet.
-4. Map documented PPU/SPU/RSX requirements and the RPCS3 architecture to a game-specific runtime boundary; identify what can be reused under its license and what is proprietary game behavior.
-5. Determine a lawful analysis path for the user's own dump and define a metadata-only report. Do not add executable contents, keys, firmware, or assets to Git.
-6. Only after the renderer and toolchain are stable, define a small CPU/SPU translation experiment and a separate RSX workload estimate.
-7. Reassess CPU, GPU, memory, performance goal, and engineering scope. State what evidence would change the estimate.
-8. Make a go/no-go decision for a playable runtime. Require measured representative gameplay performance before claiming the 50–60 FPS target.
+3. **Complete (single-frame only):** compile SPIR-V for Vulkan 1.2, create a graphics pipeline, draw a shader-backed triangle, and present it on Vega 8 at 960x540 and 1280x720.
+4. **Next:** resolve swapchain/presentation completion and resource teardown with validation layers; then build a stable multi-frame synthetic workload and a separate offscreen render target so internal resolution can vary independently of output resolution. Record frame-time distribution and memory. Investigate the `vulkaninfo` ICD warning if it affects the selected path. Do not run the game yet.
+5. Map documented PPU/SPU/RSX requirements and the RPCS3 architecture to a game-specific runtime boundary; identify what can be reused under its license and what is proprietary game behavior.
+6. Determine a lawful analysis path for the user's own dump and define a metadata-only report. Do not add executable contents, keys, firmware, or assets to Git.
+7. Only after the renderer and toolchain are stable, define a small CPU/SPU translation experiment and a separate RSX workload estimate.
+8. Reassess CPU, GPU, memory, performance goal, and engineering scope. State what evidence would change the estimate.
+9. Make a go/no-go decision for a playable runtime. Require measured representative gameplay performance before claiming the 50–60 FPS target.
+
+The current evidence-based recommendation is in the [bilingual decision memo](decision.md): proceed with narrow prototypes, but defer a full-port commitment and do not promise 50–60 FPS.
 
 ## 7. Out of scope for phase 1 / Fuera del alcance de la fase 1
 
@@ -97,9 +104,13 @@ To rerun the local capability probe from the repository root in Windows PowerShe
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-Vulkan12.ps1 -PreferDevice "Vega 8"
 powershell -STA -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-VulkanWin32Surface.ps1 -PreferDevice "Vega 8"
 powershell -STA -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-VulkanSwapchain.ps1 -PreferDevice "Vega 8"
+powershell -STA -NoProfile -ExecutionPolicy Bypass -File .\tools\Test-VulkanTriangle.ps1 -PreferDevice "Vega 8" -Width 960 -Height 540
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Compile-Shaders.ps1
 ```
 
-These probes do not need the Vulkan SDK or a compiler installation; Windows PowerShell compiles small interop declarations at runtime. The first checks Vulkan 1.2 API and graphics-queue creation. The second checks Win32 surface and presentation support. The third creates a swapchain and presents one cleared image. They do not test shader pipelines, resolution scaling, game compatibility, or sustained performance.
+The first three probes do not need the Vulkan SDK or a compiler installation; Windows PowerShell compiles small interop declarations at runtime. The triangle probe uses the checked-in GLSL/SPIR-V files and validates shader modules, graphics pipeline, and one swapchain presentation. Change `-Width` and `-Height` to choose another output size. This does not change an offscreen/internal render target yet, and the triangle does not test game compatibility or sustained performance. The probe's current swapchain teardown workaround is documented above and must be replaced before any long-running runtime is built.
+
+To rebuild the shader binaries using glslang, pass its executable path, for example `powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Compile-Shaders.ps1 -CompilerPath "C:\Tools\glslang\bin\glslang.exe"`. The binaries were generated with Khronos glslang 16.6.0 for target `vulkan1.2`; the official Windows x64 release archive SHA-256 was `82bf434e69b9bb4829de7e2b4bc2c5e7a7861e53d66cf75e5cc70f5f694a8d9b`. Temporary compiler files are ignored under `work/`.
 
 - Reference project: [`FelipePrado0/gow3_pc`](https://github.com/FelipePrado0/gow3_pc)
 - Reference README: [`gow3_pc` README](https://github.com/FelipePrado0/gow3_pc#readme)
@@ -110,3 +121,6 @@ These probes do not need the Vulkan SDK or a compiler installation; Windows Powe
 - Microsoft Windows build mapping: [Windows Insider release notes](https://learn.microsoft.com/en-us/windows-insider/release-notes/release-preview-24h2-25h2/build-26100-9539-26200-9539)
 - Khronos Vulkan Win32 surface extension: [VK_KHR_win32_surface](https://registry.khronos.org/vulkan/specs/latest/man/html/VK_KHR_win32_surface.html)
 - Khronos Vulkan surface/swapchain specification: [Vulkan Specification](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html)
+- Khronos GLSL-to-SPIR-V compiler used for the sample: [glslang releases](https://github.com/KhronosGroup/glslang/releases)
+- Triangle shader pipeline reference: [Khronos Vulkan tutorial](https://github.khronos.org/Vulkan-Site/tutorial/latest/03_Drawing_a_triangle/02_Graphics_pipeline_basics/01_Shader_modules.html)
+- RPCS3 title-specific stutter / CPU scheduling report: [issue #16909](https://github.com/RPCS3/rpcs3/issues/16909)

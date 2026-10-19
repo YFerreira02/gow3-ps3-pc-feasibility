@@ -46,10 +46,11 @@ Lowest engineering risk and best comparison baseline: automate configuration doc
 The target requires an average frame budget of 16.7–20 ms at 50–60 FPS, with stable frame pacing. The full game can be limited by CPU translation, SPU scheduling, graphics translation, memory bandwidth, shader compilation, or game logic. Lower internal resolution only helps when GPU fill/render cost is the bottleneck; it will not fix CPU/SPU saturation. The Vega 8 shares system memory and the machine has about 10 GB total, so renderer allocations and cache growth need explicit budgets.
 
 1. **Passed:** Vulkan 1.2 instance, physical device, logical graphics device/queue, Win32 surface, queue presentation support, and one cleared swapchain image presented on Vega 8.
-2. **Next:** build a shader-backed synthetic scene with adjustable internal resolution; record frame times, frame pacing, and memory at multiple output/internal resolutions.
-3. Establish a lawful, reproducible way to profile the user's own game dump without putting it in GitHub.
-4. Measure representative title workloads with a proven runtime as a reference; do not treat cutscenes or menus as gameplay performance.
-5. Only claim feasibility for 50–60 FPS if sustained representative scenes meet the budget after shader warm-up and without large recurring stutters.
+2. **Passed (single-frame smoke test):** basic vertex/fragment shader graphics pipeline and triangle presented at 960×540 and 1280×720. These are output resolutions; an offscreen internal-resolution scaler remains to be built.
+3. **Next:** fix and validate swapchain/presentation teardown, then build a stable multi-frame shader-backed synthetic workload with independent internal/output resolutions; record frame-time distribution, frame pacing, and memory at several configurations.
+4. Establish a lawful, reproducible way to profile the user's own game dump without putting it in GitHub.
+5. Measure representative title workloads with a proven runtime as a reference; do not treat cutscenes or menus as gameplay performance.
+6. Only claim feasibility for 50–60 FPS if sustained representative scenes meet the budget after shader warm-up and without large recurring stutters.
 
 ## Data boundary / Límite de datos
 
