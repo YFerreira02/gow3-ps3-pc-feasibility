@@ -61,27 +61,31 @@ internal sealed class LauncherForm : Form
 
         var note = new Label
         {
-            Text = "Prototipo de launcher para Windows 11. La ejecución del juego depende de RPCS3; esto aún no es un port nativo ni promete más FPS. Vulkan 1.2 se comprueba aparte.",
+            Text = "Prototipo de launcher para Windows 11. Puedes seleccionar la carpeta del juego o pasar una ISO directamente a RPCS3 sin copiarla ni extraerla. Esto aún no es un port nativo ni promete más FPS; Vulkan 1.2 se comprueba aparte.",
             AutoSize = true,
             MaximumSize = new Size(820, 0),
             Padding = new Padding(0, 0, 0, 12)
         };
         root.Controls.Add(note, 0, 1);
 
-        var paths = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 3, RowCount = 2, AutoSize = true, Padding = new Padding(0, 0, 0, 8) };
+        var paths = new TableLayoutPanel { Dock = DockStyle.Top, ColumnCount = 4, RowCount = 2, AutoSize = true, Padding = new Padding(0, 0, 0, 8) };
         paths.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         paths.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        paths.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         paths.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         paths.Controls.Add(new Label { Text = "RPCS3.exe", AutoSize = true, Anchor = AnchorStyles.Left, Padding = new Padding(0, 7, 10, 0) }, 0, 0);
         paths.Controls.Add(_rpcs3Path, 1, 0);
         var selectRpcs3 = new Button { Text = "Buscar…", AutoSize = true };
         selectRpcs3.Click += (_, _) => ChooseRpcs3();
         paths.Controls.Add(selectRpcs3, 2, 0);
-        paths.Controls.Add(new Label { Text = "Juego extraído", AutoSize = true, Anchor = AnchorStyles.Left, Padding = new Padding(0, 7, 10, 0) }, 0, 1);
+        paths.Controls.Add(new Label { Text = "Carpeta / ISO", AutoSize = true, Anchor = AnchorStyles.Left, Padding = new Padding(0, 7, 10, 0) }, 0, 1);
         paths.Controls.Add(_gamePath, 1, 1);
         var selectGame = new Button { Text = "Buscar carpeta…", AutoSize = true };
         selectGame.Click += (_, _) => ChooseGameFolder();
         paths.Controls.Add(selectGame, 2, 1);
+        var selectIso = new Button { Text = "Buscar ISO…", AutoSize = true };
+        selectIso.Click += (_, _) => ChooseIsoFile();
+        paths.Controls.Add(selectIso, 3, 1);
         _rpcs3Path.TextChanged += (_, _) => { SaveSettings(); RefreshReadiness(); };
         _gamePath.TextChanged += (_, _) => { SaveSettings(); RefreshReadiness(); };
         root.Controls.Add(paths, 0, 2);
@@ -162,6 +166,19 @@ internal sealed class LauncherForm : Form
         if (dialog.ShowDialog(this) == DialogResult.OK) _gamePath.Text = dialog.SelectedPath;
     }
 
+    private void ChooseIsoFile()
+    {
+        using var dialog = new OpenFileDialog
+        {
+            Title = "Selecciona una imagen ISO propia y compatible con RPCS3",
+            Filter = "Imágenes ISO (*.iso)|*.iso|Todos los archivos (*.*)|*.*",
+            CheckFileExists = true
+        };
+        if (File.Exists(_gamePath.Text) && Path.GetExtension(_gamePath.Text).Equals(".iso", StringComparison.OrdinalIgnoreCase))
+            dialog.FileName = _gamePath.Text;
+        if (dialog.ShowDialog(this) == DialogResult.OK) _gamePath.Text = dialog.FileName;
+    }
+
     private string? GetPs3GameDirectory()
     {
         var selected = _gamePath.Text.Trim().Trim('"');
@@ -172,8 +189,12 @@ internal sealed class LauncherForm : Form
         return Directory.Exists(ps3Game) ? ps3Game : null;
     }
 
-    private string? GetEbootPath()
+    private string? GetBootTarget()
     {
+        var selected = _gamePath.Text.Trim().Trim('"');
+        if (File.Exists(selected) && Path.GetExtension(selected).Equals(".iso", StringComparison.OrdinalIgnoreCase))
+            return selected;
+
         var ps3Game = GetPs3GameDirectory();
         if (ps3Game is null) return null;
         var eboot = Path.Combine(ps3Game, "USRDIR", "EBOOT.BIN");
@@ -215,7 +236,7 @@ internal sealed class LauncherForm : Form
     {
         var emulatorReady = File.Exists(_rpcs3Path.Text.Trim().Trim('"'));
         var ps3Game = GetPs3GameDirectory();
-        var eboot = GetEbootPath();
+        var bootTarget = GetBootTarget();
         var titleId = ps3Game is null ? null : ReadTitleId(ps3Game);
         var profileReady = false;
         if (emulatorReady)
@@ -224,8 +245,12 @@ internal sealed class LauncherForm : Form
             catch (ArgumentException) { }
             catch (FileNotFoundException) { }
         }
-        var gameStatus = eboot is null
-            ? "Juego: falta PS3_GAME\\USRDIR\\EBOOT.BIN"
+        var selected = _gamePath.Text.Trim().Trim('"');
+        var isIso = bootTarget is not null && File.Exists(selected) && Path.GetExtension(selected).Equals(".iso", StringComparison.OrdinalIgnoreCase);
+        var gameStatus = bootTarget is null
+            ? "Juego: selecciona PS3_GAME o una ISO"
+            : isIso
+                ? "ISO seleccionada; RPCS3 comprobará el disco y sus claves"
             : titleId is null
                 ? "Juego: falta PARAM.SFO legible"
                 : titleId.Equals(ExpectedTitleId, StringComparison.OrdinalIgnoreCase)
@@ -273,20 +298,22 @@ internal sealed class LauncherForm : Form
     private void LaunchGame()
     {
         var emulator = _rpcs3Path.Text.Trim().Trim('"');
-        var eboot = GetEbootPath();
+        var bootTarget = GetBootTarget();
         if (!File.Exists(emulator))
         {
             MessageBox.Show(this, "Selecciona un rpcs3.exe válido.", "Falta RPCS3", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
-        if (eboot is null)
+        if (bootTarget is null)
         {
-            MessageBox.Show(this, "Selecciona una carpeta extraída que contenga PS3_GAME\\USRDIR\\EBOOT.BIN. Esta versión no abre ISO directamente.", "Carpeta de juego no válida", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, "Selecciona una carpeta extraída que contenga PS3_GAME\\USRDIR\\EBOOT.BIN o una imagen ISO.", "Juego no seleccionado", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
         var ps3Game = GetPs3GameDirectory();
         var titleId = ps3Game is null ? null : ReadTitleId(ps3Game);
-        if (!ExpectedTitleId.Equals(titleId, StringComparison.OrdinalIgnoreCase))
+        var selected = _gamePath.Text.Trim().Trim('"');
+        var isIso = File.Exists(selected) && Path.GetExtension(selected).Equals(".iso", StringComparison.OrdinalIgnoreCase);
+        if (!isIso && !ExpectedTitleId.Equals(titleId, StringComparison.OrdinalIgnoreCase))
         {
             MessageBox.Show(this, $"El PARAM.SFO no identifica esta edición como {ExpectedTitleId}. El launcher evita iniciar un título distinto o una carpeta incompleta.", "Juego no validado", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
@@ -306,12 +333,14 @@ internal sealed class LauncherForm : Form
 
         var start = new ProcessStartInfo { FileName = emulator, WorkingDirectory = Path.GetDirectoryName(emulator)!, UseShellExecute = false };
         if (_directBoot.Checked) start.ArgumentList.Add("--no-gui");
-        start.ArgumentList.Add(eboot);
+        start.ArgumentList.Add(bootTarget);
         try
         {
             var process = Process.Start(start);
             if (process is null) throw new InvalidOperationException("Windows no creó el proceso RPCS3.");
-            AppendLog($"Iniciado RPCS3 (PID {process.Id}) con el EBOOT seleccionado.");
+            AppendLog(isIso
+                ? $"Iniciado RPCS3 (PID {process.Id}) con la ISO directamente; no se extrae ni copia. El perfil BCES00510 solo se aplicará si RPCS3 identifica esa edición."
+                : $"Iniciado RPCS3 (PID {process.Id}) con el EBOOT seleccionado.");
             AppendLog("El primer arranque puede compilar cachés. FPS y compatibilidad no están garantizados.");
         }
         catch (Exception ex)

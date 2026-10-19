@@ -8,7 +8,7 @@
 
 This repository studies whether a game-specific PC runtime for the **PlayStation 3 edition** of *God of War III* could be feasible on the reference PC. The design takes inspiration from the game-specific runtime, launcher, configuration, and patch workflow of [`gow3_pc`](https://github.com/FelipePrado0/gow3_pc), while recognizing that the PS3 edition requires a different execution and graphics path.
 
-The project is a feasibility study with local Vulkan probes and a read-only metadata check of the user's own PS3 disc image. The probes do not execute game code or extract game assets. They do not include game files or claim that a full port will reach the performance target.
+The project is a feasibility study with local Vulkan probes and a read-only metadata check of a local PS3 disc image; this check does not establish ownership or rights. The probes do not execute game code or extract game assets. They do not include game files or claim that a full port will reach the performance target.
 
 ## Key technical distinction
 
@@ -21,7 +21,7 @@ The project is a feasibility study with local Vulkan probes and a read-only meta
 - `PS3_GAME\USRDIR\EBOOT.BIN` is about 5.5 MB and begins with an `SCE` container signature.
 - The ISO was unmounted after inspection. No files were extracted or modified. Game files must stay outside this repository.
 
-These observations confirm a PS3-disc-like structure, but do not yet identify the executable's decrypted format, enumerate its required system calls, or establish performance feasibility.
+These observations confirm a PS3-disc-like structure, but do not yet identify the executable's decrypted format, enumerate its required system calls, or establish performance feasibility. The launcher also passes a user-owned ISO directly to RPCS3 without creating an extracted duplicate. Encrypted disc images may require a matching user-owned decryption key.
 
 The local PC was also inspected read-only. Windows reports build 26300.9711 (Windows 11 26H2); the Ryzen 5 3500U has 4 cores / 8 threads and the system has about 9.9 GB RAM. `vulkaninfo` reports Vulkan 1.2.170 on both the Vega 8 and Radeon 530. The Vega 8 exposes the checked Vulkan 1.2 features recorded in the feasibility report. Project-owned probes then successfully created a Vulkan 1.2 graphics device, a Win32 surface, a swapchain, and presented a synthetic clear-color frame on Vega 8. This verifies a basic host rendering path, not game compatibility or speed. `vulkaninfo` emitted an ICD warning during enumeration; see the report for the caveat.
 
@@ -56,7 +56,7 @@ The Win32 swapchain path remains unstable on the target AMD driver: FIFO reaches
 
 ## Launcher prototype / Prototipo del launcher
 
-This Windows x64 launcher is a front end for an **external RPCS3 installation**, not a PS3 emulator or a native game port. It accepts an extracted `PS3_GAME` folder, checks for `USRDIR\EBOOT.BIN` and `PARAM.SFO` title ID `BCES00510`, can run the repository's Vulkan 1.2 probe, remembers paths locally, and creates a per-game RPCS3 profile. The profile selects Vulkan on the Vega 8, offers 25–100% render scale relative to 1280×720, and enables RPCS3's FPS/frame-time overlay for measurement. Existing custom profiles are backed up before replacement. It can pass a locally selected firmware file to RPCS3 --installfw and opens Sony’s official update page. It does not support ISO mounting, bundle RPCS3, add game patches, or promise better performance. Use a game dump and firmware obtained lawfully for your jurisdiction.
+This Windows x64 launcher is a front end for an **external RPCS3 installation**, not a PS3 emulator or a native game port. It accepts an extracted `PS3_GAME` folder, checks for `USRDIR\EBOOT.BIN` and `PARAM.SFO` title ID `BCES00510`, can run the repository's Vulkan 1.2 probe, remembers paths locally, and creates a per-game RPCS3 profile. The profile selects Vulkan on the Vega 8, offers 25–100% render scale relative to 1280×720, and enables RPCS3's FPS/frame-time overlay for measurement. Existing custom profiles are backed up before replacement. It can pass a locally selected firmware file to RPCS3 --installfw and opens Sony’s official update page. A selected ISO is passed directly to RPCS3 without extraction or a second game copy; an encrypted image may need its matching user-provided disc key. The package does not bundle RPCS3, add game patches, or promise better performance. Use a game dump and firmware obtained lawfully for your jurisdiction.
 
 Build and publish a self-contained Windows 11 x64 app:
 
@@ -64,11 +64,11 @@ Build and publish a self-contained Windows 11 x64 app:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Publish-Gow3Launcher.ps1
 ```
 
-Run `work\Gow3LauncherRelease\GOW3 PS3 Launcher.exe`, select your own `rpcs3.exe`, then select the extracted folder containing `PS3_GAME`. If firmware is missing, download it from Sony’s official page and install it with the firmware button while RPCS3 is closed. Choose a render scale; 50% is approximately 640×360, 75% is 960×540, and 100% is 1280×720. Starting the game writes that title-specific profile and then starts RPCS3 with `--no-gui` and the EBOOT path; turn direct boot off to let RPCS3 show its main window. The first launch may build PPU/SPU caches. Vulkan is checked separately with the button in the launcher. The game is not included, and the scale has not yet been benchmarked in gameplay.
+Run `work\Gow3LauncherRelease\GOW3 PS3 Launcher.exe`, select your own `rpcs3.exe`, then select the extracted PS3_GAME folder or choose Browse ISO to pass your own ISO directly to RPCS3 without extracting a duplicate. If the image is encrypted, RPCS3 may require its matching user-provided disc key. If firmware is missing, download it from Sony's official page and install it with the firmware button while RPCS3 is closed. Choose a render scale; 50% is approximately 640×360, 75% is 960×540, and 100% is 1280×720. Starting the game writes the title-specific profile and then starts RPCS3 with `--no-gui` and the selected game path; turn direct boot off to let RPCS3 show its main window. The first launch may build PPU/SPU caches. Vulkan is checked separately with the launcher button. The game is not included, and the scale has not yet been benchmarked in gameplay.
 
 The publish script also creates `work\Gow3Launcher-win-x64.zip` for easy local transfer.
 
-Este launcher x64 para Windows es una interfaz para una instalación **externa de RPCS3**, no un emulador PS3 ni un port nativo. Acepta una carpeta `PS3_GAME` extraída, verifica `USRDIR\EBOOT.BIN` y el ID de `PARAM.SFO` `BCES00510`, ejecuta el probe Vulkan 1.2, guarda las rutas y crea un perfil por juego. El perfil selecciona Vulkan en la Vega 8, ofrece escala interna de 25–100% respecto a 1280×720 y activa el overlay de FPS/tiempos de cuadro de RPCS3 para medir. Respalda el perfil anterior si existe. Permite seleccionar firmware local y pasarlo a RPCS3 con --installfw, y abre la página oficial de actualizaciones de Sony. No monta ISO, incluye RPCS3, agrega parches del juego ni promete más rendimiento. Usa una copia del juego y firmware obtenidos legalmente en tu jurisdicción.
+Este launcher x64 para Windows es una interfaz para una instalación **externa de RPCS3**, no un emulador PS3 ni un port nativo. Acepta una carpeta `PS3_GAME` extraída, verifica `USRDIR\EBOOT.BIN` y el ID de `PARAM.SFO` `BCES00510`, ejecuta el probe Vulkan 1.2, guarda las rutas y crea un perfil por juego. El perfil selecciona Vulkan en la Vega 8, ofrece escala interna de 25–100% respecto a 1280×720 y activa el overlay de FPS/tiempos de cuadro de RPCS3 para medir. Respalda el perfil anterior si existe. Permite seleccionar firmware local y pasarlo a RPCS3 con --installfw, y abre la página oficial de actualizaciones de Sony. Pasa una ISO directamente a RPCS3 sin extraerla ni crear otra copia; una imagen cifrada puede requerir una clave propia compatible. No incluye RPCS3, agrega parches del juego ni promete más rendimiento. Usa una copia del juego y firmware obtenidos legalmente en tu jurisdicción.
 
 Compila y publica una app autocontenida para Windows 11 x64:
 
@@ -76,7 +76,7 @@ Compila y publica una app autocontenida para Windows 11 x64:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Publish-Gow3Launcher.ps1
 ```
 
-Ejecuta `work\Gow3LauncherRelease\GOW3 PS3 Launcher.exe`, selecciona tu propio `rpcs3.exe` y luego la carpeta extraída que contiene `PS3_GAME`. Si falta firmware, descárgalo desde Sony e instálalo con el botón de firmware con RPCS3 cerrado. Elige una escala de renderizado: 50% equivale aproximadamente a 640×360, 75% a 960×540 y 100% a 1280×720. Al iniciar se guarda el perfil específico del juego y luego RPCS3 se ejecuta con `--no-gui` y la ruta del EBOOT; desactiva el inicio directo para mostrar la ventana principal. El primer inicio puede crear cachés PPU/SPU. El botón del launcher comprueba Vulkan por separado. El juego no está incluido y la escala aún no se ha medido durante el juego.
+Ejecuta `work\Gow3LauncherRelease\GOW3 PS3 Launcher.exe`, selecciona tu propio `rpcs3.exe` y luego la carpeta PS3_GAME extraída o pulsa Buscar ISO para pasar tu ISO directamente a RPCS3 sin crear otra copia. Si la imagen está cifrada, RPCS3 puede necesitar su clave propia correspondiente. Si falta firmware, descárgalo desde la página oficial de Sony e instálalo con el botón de firmware, con RPCS3 cerrado. Elige una escala: 50% equivale aproximadamente a 640×360, 75% a 960×540 y 100% a 1280×720. Al iniciar se guarda el perfil del título y RPCS3 recibe la ruta del juego; desactiva el inicio directo para mostrar su ventana principal. Vulkan se comprueba por separado. El juego no está incluido y la escala aún no se ha medido durante el juego.
 
 El script de publicación también crea `work\Gow3Launcher-win-x64.zip` para transferirlo localmente.
 
@@ -111,7 +111,7 @@ La ruta de swapchain Win32 sigue inestable con el driver AMD del equipo: FIFO ll
 
 La ruta gráfica pasó sus primeras puertas en la Vega 8: crea un pipeline Vulkan, dibuja un triángulo sintético y admite salida 960×540 y 1280×720. El swapchain Win32 se bloquea tras varias imágenes, así que también se probó la ruta fuera de pantalla con escalado por Windows. La carga PPU/SPU del juego y la meta de 50–60 FPS siguen sin probarse. Consulta el [memo de decisión](docs/decision.md).
 
-Estas observaciones confirman una estructura similar a la de un disco de PS3, pero todavía no identifican el formato descifrado del ejecutable, sus llamadas de sistema requeridas ni la viabilidad del rendimiento.
+Estas observaciones confirman una estructura similar a la de un disco de PS3, pero todavía no identifican el formato descifrado del ejecutable, sus llamadas de sistema requeridas ni la viabilidad del rendimiento. El launcher también pasa una ISO propia directamente a RPCS3 sin crear una copia extraída. Las imágenes cifradas pueden requerir una clave de descifrado propia.
 
 ### Licencia y reutilización
 

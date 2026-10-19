@@ -28,21 +28,21 @@ GOW III PS3 - Launcher experimental para Windows 11 x64
 
 REQUISITOS
 - RPCS3 instalado por separado. Este paquete no lo incluye.
-- Una copia propia/legal de God of War III PS3 extraida a una carpeta PS3_GAME.
+- Una copia propia/legal de God of War III PS3 como carpeta PS3_GAME o ISO compatible con RPCS3.
 - Firmware PS3 instalado por el usuario en RPCS3.
 
 USO
 1. Abre "GOW3 PS3 Launcher.exe".
 2. Selecciona rpcs3.exe.
-3. Selecciona la carpeta extraida que contiene PS3_GAME.
+3. Selecciona la carpeta extraida que contiene PS3_GAME o pulsa Buscar ISO para cargarla directamente sin extraer otra copia.
 4. Si falta firmware, descárgalo de Sony e instálalo con el botón del launcher; RPCS3 debe estar cerrado.
 5. Elige la escala interna, comprueba Vulkan 1.2 y luego inicia el juego.
 6. Desmarca el inicio directo si quieres ver la ventana principal de RPCS3.
 
-Este programa verifica PARAM.SFO y solo acepta el ID BCES00510 (version europea).
+La carpeta extraida se valida con PARAM.SFO BCES00510. La ISO se pasa directamente a RPCS3, que debe reconocer el disco; una imagen cifrada puede requerir la clave propia correspondiente.
 Escala interna: 25-100% de 1280x720; el perfil anterior se respalda al cambiarlo.
 El perfil activa el overlay de FPS/frame time de RPCS3 para medir.
-No abre ISO ni instala parches; pasa un PUP local a RPCS3 con --installfw. Sigue siendo un frontend, no un port nativo.
+No extrae ni copia la ISO: pasa su ruta a RPCS3. No instala parches; pasa un PUP local a RPCS3 con --installfw. Sigue siendo un frontend, no un port nativo.
 La compatibilidad y el rendimiento dependen de RPCS3 y del equipo; 50-60 FPS no esta garantizado.
 La configuracion local se guarda en %LOCALAPPDATA%\GOW3PS3PC.
 '@ | Set-Content -LiteralPath $readme -Encoding utf8
