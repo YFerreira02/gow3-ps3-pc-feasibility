@@ -23,9 +23,18 @@ The first phase is research and a small, read-only technical probe of a user-own
 
 These observations confirm a PS3-disc-like structure, but do not yet identify the executable's decrypted format, enumerate its required system calls, or establish performance feasibility.
 
+The local PC was also inspected read-only. Windows reports build 26300.9711 (Windows 11 26H2); the Ryzen 5 3500U has 4 cores / 8 threads and the system has about 9.9 GB RAM. `vulkaninfo` reports Vulkan 1.2.170 on both the Vega 8 and Radeon 530. The Vega 8 exposes the checked Vulkan 1.2 features recorded in the feasibility report. This verifies the API floor on paper, not game compatibility or speed. The AMD Vulkan tool emitted an ICD warning during enumeration; see the report for the caveat.
+
+The ISO's `PARAM.SFO` identifies title ID `BCES00510`, Europe, application version `01.00`, and disc version `01.03`. These identifiers help constrain later compatibility research; no game payload is stored here.
+
+## Preliminary decision
+
+Proceed with a **focused feasibility prototype**, not a promise of a full port. The PC meets the stated Vulkan 1.2 minimum, but 50–60 FPS remains unverified and high risk on this low-power CPU/iGPU. A game-specific Windows application can have a native PC interface and Vulkan renderer, but running the PS3 build still requires CPU/system translation and RSX emulation/translation. See [`docs/architecture.md`](docs/architecture.md) and [`docs/viability.md`](docs/viability.md).
+
 ## Repository map
 
 - [`docs/viability.md`](docs/viability.md): current scope, evidence, risks, and next investigation steps.
+- [`docs/architecture.md`](docs/architecture.md): candidate runtime structure and technical decision points.
 - `.gitignore`: excludes common disc images, extracted game folders, and game archives from Git.
 
 ## License and reuse
