@@ -31,7 +31,7 @@ The ISO's `PARAM.SFO` identifies title ID `BCES00510`, Europe, application versi
 
 Proceed with a **focused feasibility prototype**, not a promise of a full port. The PC meets the stated Vulkan 1.2 minimum, but 50–60 FPS remains unverified and high risk on this low-power CPU/iGPU. A game-specific Windows application can have a native PC interface and Vulkan renderer, but running the PS3 build still requires CPU/system translation and RSX emulation/translation. See [`docs/architecture.md`](docs/architecture.md) and [`docs/viability.md`](docs/viability.md).
 
-The Vulkan graphics path passes a one-frame smoke test on Vega 8 at 960×540 and 1280×720. Khronos validation helped fix an invalid enum, but still reports a swapchain leak at teardown; the experimental multi-frame path crashes requesting its third image. This is not a stable renderer or performance result. Output dimensions are configurable, but internal upscaling, game CPU/SPU workload, and the 50–60 FPS target remain untested. See the [decision memo](docs/decision.md).
+The Vulkan graphics path passes a one-frame smoke test on Vega 8 at 960×540 and 1280×720. Khronos validation helped fix an invalid enum, but still reports a swapchain leak at teardown. Both the original C# probe and a native C cross-check crash on the third swapchain acquire, with WER identifying `amdvlk64.dll`; the native command sequence still needs independent review before assigning cause. This is not a stable renderer or performance result. Output dimensions are configurable, but internal upscaling, game CPU/SPU workload, and the 50–60 FPS target remain untested. See the [decision memo](docs/decision.md).
 
 ## Repository map
 
@@ -43,6 +43,8 @@ The Vulkan graphics path passes a one-frame smoke test on Vega 8 at 960×540 and
 - [`tools/Test-VulkanSwapchain.ps1`](tools/Test-VulkanSwapchain.ps1): creates a hidden Win32 surface and Vulkan swapchain, clears one image, and presents it.
 - [`tools/Test-VulkanTriangle.ps1`](tools/Test-VulkanTriangle.ps1): creates a shader pipeline, draws a synthetic triangle, and accepts configurable swapchain dimensions.
 - [`tools/VulkanTriangleProbe.cs`](tools/VulkanTriangleProbe.cs): Vulkan interop and pipeline implementation used by the triangle probe.
+- [`tools/VulkanNativePresentProbe.c`](tools/VulkanNativePresentProbe.c): native C cross-check of Vulkan acquire/clear/present and swapchain teardown, used only for diagnosing the target AMD driver.
+- [`tools/Build-VulkanNativePresentProbe.ps1`](tools/Build-VulkanNativePresentProbe.ps1) and [`tools/Run-VulkanNativePresentProbe.ps1`](tools/Run-VulkanNativePresentProbe.ps1): build and run the native cross-check with an installed Zig compiler and Vulkan SDK.
 - [`tools/Compile-Shaders.ps1`](tools/Compile-Shaders.ps1): rebuilds the checked-in SPIR-V files from the GLSL sources.
 - `.gitignore`: excludes common disc images, extracted game folders, and game archives from Git.
 
@@ -62,7 +64,7 @@ Este repositorio estudia si sería viable crear un runtime para PC específico p
 
 La primera fase consiste en investigar y hacer una prueba técnica pequeña, de solo lectura, sobre una imagen de disco propia. No ejecuta código del juego, no extrae recursos, no incluye archivos del juego y no promete que un port completo alcance la meta de rendimiento.
 
-La prueba Vulkan de un solo frame funciona en la Vega 8 a 960×540 y 1280×720. La validación Khronos permitió corregir un enum inválido, pero todavía registra una fuga del swapchain al cerrar; el experimento de varios frames cae al pedir la tercera imagen. Aún no es un renderer estable ni una medición de rendimiento. La resolución de salida es configurable, pero no se ha probado el escalado interno, la carga CPU/SPU del juego ni la meta de 50–60 FPS.
+La prueba Vulkan de un solo frame funciona en la Vega 8 a 960×540 y 1280×720. La validación Khronos permitió corregir un enum inválido, pero todavía registra una fuga del swapchain al cerrar. Tanto el probe C# como una comprobación independiente en C nativo caen al adquirir la tercera imagen; WER señala `amdvlk64.dll`, aunque la secuencia nativa aún debe revisarse de forma independiente antes de asignar la causa. Todavía no es un renderer estable ni una medición de rendimiento. La resolución de salida es configurable, pero no se ha probado el escalado interno, la carga CPU/SPU del juego ni la meta de 50–60 FPS.
 
 ### Diferencia técnica clave
 

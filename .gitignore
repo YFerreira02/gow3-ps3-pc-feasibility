@@ -22,3 +22,6 @@ work/
 *.dump
 *.bin
 *.elf
+tools/VulkanNativePresentProbe.dll
+tools/VulkanNativePresentProbe.lib
+tools/VulkanNativePresentProbe.pdb
