@@ -103,6 +103,12 @@ internal sealed class LauncherForm : Form
         var vulkan = new Button { Text = "Comprobar Vulkan 1.2", AutoSize = true, Padding = new Padding(10, 4, 10, 4) };
         vulkan.Click += async (_, _) => await RunVulkanProbeAsync(vulkan);
         actions.Controls.Add(vulkan);
+        var installFirmware = new Button { Text = "Instalar firmware PS3…", AutoSize = true, Padding = new Padding(10, 4, 10, 4) };
+        installFirmware.Click += async (_, _) => await InstallFirmwareAsync(installFirmware);
+        actions.Controls.Add(installFirmware);
+        var firmwareHelp = new LinkLabel { Text = "Firmware oficial Sony", AutoSize = true, Padding = new Padding(8, 8, 0, 0), LinkColor = SystemColors.HotTrack };
+        firmwareHelp.Click += (_, _) => Process.Start(new ProcessStartInfo("https://www.playstation.com/es-es/support/hardware/ps3/system-software/") { UseShellExecute = true });
+        actions.Controls.Add(firmwareHelp);
         root.Controls.Add(actions, 0, 3);
 
         var bottom = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
@@ -355,6 +361,54 @@ internal sealed class LauncherForm : Form
             AppendLog($"Probe terminado con código {process.ExitCode}.");
         }
         catch (Exception ex) { AppendLog($"No se pudo ejecutar el probe Vulkan: {ex.Message}"); }
+        finally { button.Enabled = true; }
+    }
+
+    private async Task InstallFirmwareAsync(Button button)
+    {
+        var emulator = _rpcs3Path.Text.Trim().Trim('"');
+        if (!File.Exists(emulator) || !Path.GetFileName(emulator).Equals("rpcs3.exe", StringComparison.OrdinalIgnoreCase))
+        {
+            MessageBox.Show(this, "Selecciona primero un rpcs3.exe válido.", "Falta RPCS3", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        using var dialog = new OpenFileDialog
+        {
+            Title = "Selecciona el firmware oficial de PS3 descargado desde Sony",
+            Filter = "Actualización del sistema PS3 (PS3UPDAT.PUP)|PS3UPDAT.PUP|Archivos PUP (*.PUP)|*.PUP|Todos los archivos (*.*)|*.*",
+            CheckFileExists = true
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+
+        var running = Process.GetProcessesByName(Path.GetFileNameWithoutExtension(emulator));
+        if (running.Length > 0)
+        {
+            foreach (var process in running) process.Dispose();
+            MessageBox.Show(this, "Cierra primero RPCS3. Luego instala el firmware desde esta ventana.", "RPCS3 está abierto", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        button.Enabled = false;
+        try
+        {
+            var start = new ProcessStartInfo { FileName = emulator, WorkingDirectory = Path.GetDirectoryName(emulator)!, UseShellExecute = false };
+            start.ArgumentList.Add("--installfw");
+            start.ArgumentList.Add(dialog.FileName);
+            AppendLog("Iniciando el instalador oficial de RPCS3 para el firmware seleccionado. El archivo no se copia al repositorio.");
+            using var process = Process.Start(start) ?? throw new InvalidOperationException("Windows no creó el proceso RPCS3.");
+            await process.WaitForExitAsync();
+            AppendLog($"El instalador de firmware RPCS3 terminó con código {process.ExitCode}. Revisa RPCS3.log si el firmware no aparece instalado.");
+            if (process.ExitCode == 0)
+                MessageBox.Show(this, "RPCS3 terminó la instalación del firmware. Revisa su registro y vuelve a iniciar RPCS3 para comprobarlo.", "Instalación finalizada", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            else
+                MessageBox.Show(this, $"RPCS3 terminó con código {process.ExitCode}. Revisa RPCS3.log para ver el error.", "No se confirmó la instalación", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"No se pudo instalar el firmware: {ex}");
+            MessageBox.Show(this, $"No se pudo ejecutar el instalador de RPCS3: {ex.Message}", "Error al instalar firmware", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
         finally { button.Enabled = true; }
     }
 
