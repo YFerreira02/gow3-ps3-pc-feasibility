@@ -989,6 +989,12 @@ PpuStepResult ppu_step(PpuState *state)
         case 233: result = state->gpr[ra] * state->gpr[rb]; break; /* mulld */
         case 235: result = (uint32_t)state->gpr[ra] * (uint32_t)state->gpr[rb]; break; /* mullw */
         case 9: result = multiply_high_unsigned(state->gpr[ra], state->gpr[rb]); break; /* mulhdu */
+        case 11: result = ((uint32_t)state->gpr[ra] * (uint64_t)(uint32_t)state->gpr[rb]) >> 32; break; /* mulhwu */
+        case 75: {
+            const int64_t product = (int64_t)(int32_t)state->gpr[ra] * (int64_t)(int32_t)state->gpr[rb];
+            result = (uint64_t)(int64_t)(int32_t)((uint64_t)product >> 32);
+            break;
+        } /* mulhw */
         case 73: {
             const uint64_t left = state->gpr[ra], right = state->gpr[rb];
             result = multiply_high_unsigned(left, right);

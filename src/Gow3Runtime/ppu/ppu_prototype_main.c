@@ -444,9 +444,11 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == (uint32_t)(7u * (uint32_t)-21),
                 "mullw keeps and zero-extends the low 32-bit product");
 
-    static uint8_t high_multiply_code[8];
+    static uint8_t high_multiply_code[16];
     EMIT_BE(high_multiply_code, 0, X_FORM(5, 3, 4, 9, 0));  /* mulhdu */
     EMIT_BE(high_multiply_code, 1, X_FORM(6, 3, 4, 73, 0)); /* mulhd */
+    EMIT_BE(high_multiply_code, 2, X_FORM(7, 3, 4, 11, 0)); /* mulhwu */
+    EMIT_BE(high_multiply_code, 3, X_FORM(8, 3, 4, 75, 0)); /* mulhw */
     ppu_state_init(&state, high_multiply_code, sizeof(high_multiply_code), 0);
     state.gpr[3] = 0x8000000000000000ull; state.gpr[4] = 2;
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[5] == 1,
@@ -459,6 +461,20 @@ void entry(void)
                 "mulhdu accounts for cross-products between operand halves");
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == UINT64_MAX,
                 "mulhd applies signed correction to the unsigned high product");
+    ppu_state_init(&state, high_multiply_code, sizeof(high_multiply_code), 0);
+    state.pc = 8;
+    state.gpr[3] = 0x80000000u; state.gpr[4] = 2;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[7] == 1,
+                "mulhwu returns the high half of an unsigned word product");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[8] == UINT64_MAX,
+                "mulhw sign-extends the high half of a signed word product");
+    ppu_state_init(&state, high_multiply_code, sizeof(high_multiply_code), 0);
+    state.pc = 8;
+    state.gpr[3] = 0x7fffffffu; state.gpr[4] = 0x7fffffffu;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[7] == 0x3fffffff,
+                "mulhwu computes the upper half across nontrivial word operands");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[8] == 0x3fffffff,
+                "mulhw computes the signed upper half for positive operands");
 
     static uint8_t carry_ops[32];
     EMIT_BE(carry_ops, 0, X_FORM(5, 3, 4, 10, 0));  /* addc */
