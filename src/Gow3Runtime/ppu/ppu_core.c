@@ -298,6 +298,18 @@ PpuStepResult ppu_step(PpuState *state)
         const uint32_t bi = (insn >> 16) & 31u;
         const uint32_t xo = (insn >> 1) & 0x3ffu;
         const uint64_t next_pc = state->pc + 4;
+        if (xo == 0u) { /* mcrf: move one condition-register field */
+            const uint32_t bf = (insn >> 23) & 7u;
+            const uint32_t bfa = (insn >> 18) & 7u;
+            if ((insn & 1u) != 0)
+                return PPU_STEP_UNSUPPORTED;
+            const uint32_t source_shift = 28u - (bfa * 4u);
+            const uint32_t target_shift = 28u - (bf * 4u);
+            const uint32_t value = (state->cr >> source_shift) & 0x0fu;
+            state->cr = (state->cr & ~(0x0fu << target_shift)) | (value << target_shift);
+            state->pc = next_pc;
+            return PPU_STEP_OK;
+        }
         if (xo == 33u || xo == 129u || xo == 193u || xo == 225u ||
             xo == 257u || xo == 289u || xo == 417u || xo == 449u) {
             const uint32_t bt = rt;

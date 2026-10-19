@@ -542,6 +542,13 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.cr == 0x89fbcdef,
                 "mtcrf updates only the selected CR field");
 
+    uint8_t mcrf_code[4];
+    EMIT_BE(mcrf_code, 0, (19u << 26) | (2u << 23) | (4u << 18)); /* mcrf cr2,cr4 */
+    ppu_state_init(&state, mcrf_code, sizeof(mcrf_code), 0);
+    state.cr = 0x12345678;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.cr == 0x12545678,
+                "mcrf copies one condition-register field and preserves the others");
+
     uint8_t cr_logic[16];
     EMIT_BE(cr_logic, 0, CR_FORM(3, 1, 2, 257)); /* crand 3,1,2 */
     EMIT_BE(cr_logic, 1, CR_FORM(4, 1, 2, 193)); /* crxor 4,1,2 */
