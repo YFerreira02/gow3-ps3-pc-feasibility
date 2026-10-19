@@ -31,6 +31,8 @@ static void put_u64_be(uint8_t *p, uint64_t value)
     (((uint32_t)(spr) & 31u) << 16) | (((uint32_t)(spr) >> 5) << 11) | ((uint32_t)(xo) << 1))
 #define DS_FORM(op, rt, ra, disp, xo) (((uint32_t)(op) << 26) | ((uint32_t)(rt) << 21) | \
     ((uint32_t)(ra) << 16) | ((uint16_t)(disp) & 0xfffcu) | (uint32_t)(xo))
+#define CR_FORM(bt, ba, bb, xo) ((19u << 26) | ((uint32_t)(bt) << 21) | \
+    ((uint32_t)(ba) << 16) | ((uint32_t)(bb) << 11) | ((uint32_t)(xo) << 1))
 #define EMIT_BE(dst, i, word) do { \
     (dst)[(i) * 4] = (uint8_t)((word) >> 24); \
     (dst)[(i) * 4 + 1] = (uint8_t)((word) >> 16); \
@@ -311,6 +313,22 @@ void entry(void)
                 "mtcrf restores all CR fields");
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.cr == 0x89fbcdef,
                 "mtcrf updates only the selected CR field");
+
+    uint8_t cr_logic[16];
+    EMIT_BE(cr_logic, 0, CR_FORM(3, 1, 2, 257)); /* crand 3,1,2 */
+    EMIT_BE(cr_logic, 1, CR_FORM(4, 1, 2, 193)); /* crxor 4,1,2 */
+    EMIT_BE(cr_logic, 2, CR_FORM(5, 3, 4, 33));  /* crnor 5,3,4 */
+    EMIT_BE(cr_logic, 3, CR_FORM(6, 3, 4, 289)); /* creqv 6,3,4 */
+    ppu_state_init(&state, cr_logic, sizeof(cr_logic), 0);
+    state.cr = (1u << (31u - 1u)) | (1u << (31u - 2u));
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && ((state.cr >> (31u - 3u)) & 1u) == 1u,
+                "crand combines selected CR bits");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && ((state.cr >> (31u - 4u)) & 1u) == 0u,
+                "crxor writes the selected condition bit");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && ((state.cr >> (31u - 5u)) & 1u) == 0u,
+                "crnor computes the inverse OR of CR bits");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && ((state.cr >> (31u - 6u)) & 1u) == 0u,
+                "creqv writes the equivalence result");
 
     uint8_t ds_code[20];
     EMIT_BE(ds_code, 0, DS_FORM(58, 5, 3, 0, 0));  /* ld */

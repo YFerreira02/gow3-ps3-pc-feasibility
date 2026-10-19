@@ -237,6 +237,31 @@ PpuStepResult ppu_step(PpuState *state)
         const uint32_t bi = (insn >> 16) & 31u;
         const uint32_t xo = (insn >> 1) & 0x3ffu;
         const uint64_t next_pc = state->pc + 4;
+        if (xo == 33u || xo == 129u || xo == 193u || xo == 225u ||
+            xo == 257u || xo == 289u || xo == 417u || xo == 449u) {
+            const uint32_t bt = rt;
+            const uint32_t ba = ra;
+            const uint32_t bb = (insn >> 11) & 31u;
+            const uint32_t a = (state->cr >> (31u - ba)) & 1u;
+            const uint32_t b = (state->cr >> (31u - bb)) & 1u;
+            uint32_t value;
+            if ((insn & 1u) != 0)
+                return PPU_STEP_UNSUPPORTED;
+            switch (xo) {
+            case 33: value = !(a | b); break;        /* crnor */
+            case 129: value = a & !b; break;         /* crandc */
+            case 193: value = a ^ b; break;          /* crxor */
+            case 225: value = !(a & b); break;       /* crnand */
+            case 257: value = a & b; break;          /* crand */
+            case 289: value = !(a ^ b); break;       /* creqv */
+            case 417: value = a | !b; break;         /* crorc */
+            default: value = a | b; break;           /* cror */
+            }
+            const uint32_t target_mask = 1u << (31u - bt);
+            state->cr = value ? (state->cr | target_mask) : (state->cr & ~target_mask);
+            state->pc = next_pc;
+            return PPU_STEP_OK;
+        }
         if (xo == 16u) { /* bclr */
             const uint64_t target = state->lr & ~3ull;
             if ((insn & 1u) != 0)
