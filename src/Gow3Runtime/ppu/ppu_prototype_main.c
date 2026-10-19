@@ -39,6 +39,10 @@ static void put_u64_be(uint8_t *p, uint64_t value)
     ((uint32_t)(ra) << 16) | ((uint32_t)(rb) << 11) | ((uint32_t)(frc) << 6) | ((uint32_t)(xo) << 1))
 #define FP_X(rt, rb, xo) ((63u << 26) | ((uint32_t)(rt) << 21) | \
     ((uint32_t)(rb) << 11) | ((uint32_t)(xo) << 1))
+#define MD_FORM(rs, ra, sh, mb, xo, rc) ((30u << 26) | ((uint32_t)(rs) << 21) | \
+    ((uint32_t)(ra) << 16) | (((uint32_t)(sh) & 31u) << 11) | \
+    (((uint32_t)(mb) & 63u) << 5) | (((uint32_t)(xo) & 7u) << 2) | \
+    (((uint32_t)(sh) & 32u) >> 4) | (rc))
 #define EMIT_BE(dst, i, word) do { \
     (dst)[(i) * 4] = (uint8_t)((word) >> 24); \
     (dst)[(i) * 4 + 1] = (uint8_t)((word) >> 16); \
@@ -231,6 +235,24 @@ void entry(void)
                 "rlwimi inserts selected rotated bits and records CR0");
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == 0x23456781,
                 "rlwnm takes its shift amount from RB");
+
+    uint8_t double_rotate_code[16];
+    EMIT_BE(double_rotate_code, 0, MD_FORM(3, 4, 0, 32, 0, 1)); /* rldicl. */
+    EMIT_BE(double_rotate_code, 1, MD_FORM(3, 5, 4, 15, 1, 0)); /* rldicr */
+    EMIT_BE(double_rotate_code, 2, MD_FORM(6, 7, 8, 16, 2, 0)); /* rldic */
+    EMIT_BE(double_rotate_code, 3, MD_FORM(8, 9, 48, 8, 3, 0)); /* rldimi */
+    ppu_state_init(&state, double_rotate_code, sizeof(double_rotate_code), 0);
+    state.gpr[3] = 0x123456789abcdef0ull;
+    state.gpr[6] = 0xff; state.gpr[8] = 0xab; state.gpr[9] = UINT64_MAX;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[4] == 0x000000009abcdef0ull &&
+                ((state.cr >> 28) & 0x0fu) == 4u,
+                "rldicl rotates a doubleword, clears by Power bit numbering, and records CR0");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[5] == 0x2345000000000000ull,
+                "rldicr clears the right side of the rotated doubleword");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[7] == 0xff00,
+                "rldic rotates and clears both sides of a doubleword");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[9] == 0xffabffffffffffffull,
+                "rldimi inserts a rotated bit field and preserves other destination bits");
 
     uint8_t xform[20];
     EMIT_BE(xform, 0, X_FORM(5, 3, 4, 266, 0)); /* add r5,r3,r4 */

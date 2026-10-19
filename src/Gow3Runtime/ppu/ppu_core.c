@@ -26,6 +26,26 @@ static uint32_t rotate_mask(uint32_t begin, uint32_t end)
     return mask;
 }
 
+static uint64_t rotate_left_doubleword(uint64_t value, uint32_t shift)
+{
+    shift &= 63u;
+    return shift == 0 ? value : (value << shift) | (value >> (64u - shift));
+}
+
+static uint64_t rotate_mask_doubleword(uint32_t begin, uint32_t end)
+{
+    uint64_t mask = 0;
+    for (uint32_t bit = 0; bit < 64u; ++bit) {
+        const uint32_t ppc_bit = 63u - bit;
+        const int selected = begin <= end
+            ? (ppc_bit >= begin && ppc_bit <= end)
+            : (ppc_bit >= begin || ppc_bit <= end);
+        if (selected)
+            mask |= 1ull << bit;
+    }
+    return mask;
+}
+
 static uint64_t double_bits(double value)
 {
     union { double d; uint64_t u; } bits;
@@ -237,6 +257,27 @@ PpuStepResult ppu_step(PpuState *state)
         state->gpr[ra] = state->gpr[rt] & ((uint64_t)imm << 16);
         set_cr_field(state, 0, state->gpr[ra] == 0 ? 1u : 2u);
         break;
+    case 30: { /* MD-form rotate doubleword immediate operations */
+        const uint32_t sh = ((insn >> 11) & 31u) | ((insn & 2u) << 4);
+        const uint32_t mb = (insn >> 5) & 63u;
+        const uint32_t xo = (insn >> 2) & 7u;
+        const int record = (insn & 1u) != 0;
+        const uint64_t rotated = rotate_left_doubleword(state->gpr[rt], sh);
+        uint32_t begin, end;
+        if (xo == 0u) { begin = mb; end = 63u; } /* rldicl */
+        else if (xo == 1u) { begin = 0u; end = mb; } /* rldicr */
+        else if (xo == 2u || xo == 3u) { begin = mb; end = (63u - sh) & 63u; }
+        else return PPU_STEP_UNSUPPORTED;
+        const uint64_t mask = rotate_mask_doubleword(begin, end);
+        const uint64_t result = xo == 3u
+            ? ((state->gpr[ra] & ~mask) | (rotated & mask))
+            : (rotated & mask);
+        state->gpr[ra] = result;
+        if (record)
+            set_cr0_from_result(state, result);
+        state->pc += 4;
+        return PPU_STEP_OK;
+    }
     case 46: case 47: { /* lmw / stmw: transfer GPRs RT through r31 */
         const size_t transfer_size = (size_t)(32u - rt) * 4u;
         size_t memory_offset;
