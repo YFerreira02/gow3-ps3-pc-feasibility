@@ -409,12 +409,15 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == (uint32_t)(7u * (uint32_t)-21),
                 "mullw keeps and zero-extends the low 32-bit product");
 
-    uint8_t carry_ops[20];
+    uint8_t carry_ops[32];
     EMIT_BE(carry_ops, 0, X_FORM(5, 3, 4, 10, 0));  /* addc */
     EMIT_BE(carry_ops, 1, X_FORM(6, 3, 4, 138, 0)); /* adde */
     EMIT_BE(carry_ops, 2, X_FORM(7, 3, 4, 8, 0));   /* subfc */
     EMIT_BE(carry_ops, 3, X_FORM(8, 3, 4, 136, 0)); /* subfe */
     EMIT_BE(carry_ops, 4, X_FORM(9, 3, 0, 202, 0)); /* addze */
+    EMIT_BE(carry_ops, 5, X_FORM(10, 3, 0, 234, 0)); /* addme */
+    EMIT_BE(carry_ops, 6, X_FORM(11, 3, 0, 200, 0)); /* subfze */
+    EMIT_BE(carry_ops, 7, X_FORM(12, 3, 0, 232, 0)); /* subfme */
     ppu_state_init(&state, carry_ops, sizeof(carry_ops), 0);
     state.gpr[3] = UINT64_MAX; state.gpr[4] = 1;
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[5] == 0 && state.xer_ca == 1,
@@ -430,6 +433,15 @@ void entry(void)
     state.xer_ca = 1; state.gpr[3] = UINT64_MAX;
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[9] == 0 && state.xer_ca == 1,
                 "addze adds the carry bit to its register operand");
+    state.gpr[3] = 0; state.xer_ca = 0;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[10] == UINT64_MAX && state.xer_ca == 0,
+                "addme adds carry and minus one with correct carry-out");
+    state.gpr[3] = 0; state.xer_ca = 1;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[11] == 0 && state.xer_ca == 1,
+                "subfze adds the complemented operand and carry");
+    state.gpr[3] = 0; state.xer_ca = 0;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[12] == (uint64_t)-2 && state.xer_ca == 1,
+                "subfme subtracts from minus one with correct carry-out");
 
     uint8_t fp_code[60];
     EMIT_BE(fp_code, 0, FP_A(3, 1, 2, 0, 21)); /* fadd */

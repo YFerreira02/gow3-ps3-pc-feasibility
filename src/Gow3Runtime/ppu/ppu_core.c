@@ -782,6 +782,27 @@ PpuStepResult ppu_step(PpuState *state)
             state->xer_ca = (uint8_t)(carry_in && result == 0);
             break;
         }
+        case 234: { /* addme */
+            if ((insn & (1u << 10)) != 0) return PPU_STEP_UNSUPPORTED;
+            const uint64_t carry_in = state->xer_ca & 1u;
+            result = state->gpr[ra] + UINT64_MAX + carry_in;
+            state->xer_ca = (uint8_t)(carry_in || state->gpr[ra] != 0);
+            break;
+        }
+        case 200: { /* subfze */
+            if ((insn & (1u << 10)) != 0) return PPU_STEP_UNSUPPORTED;
+            const uint64_t carry_in = state->xer_ca & 1u;
+            result = ~state->gpr[ra] + carry_in;
+            state->xer_ca = (uint8_t)(carry_in && state->gpr[ra] == 0);
+            break;
+        }
+        case 232: { /* subfme */
+            if ((insn & (1u << 10)) != 0) return PPU_STEP_UNSUPPORTED;
+            const uint64_t carry_in = state->xer_ca & 1u;
+            result = ~state->gpr[ra] + UINT64_MAX + carry_in;
+            state->xer_ca = (uint8_t)(carry_in || state->gpr[ra] != UINT64_MAX);
+            break;
+        }
         case 28: result = state->gpr[ra] & state->gpr[rb]; break; /* and */
         case 60: result = state->gpr[ra] & ~state->gpr[rb]; break; /* andc */
         case 124: result = ~(state->gpr[ra] | state->gpr[rb]); break; /* nor */
