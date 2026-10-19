@@ -465,6 +465,49 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[8] == 32 && fp_memory[32] == 0x40,
                 "stfdu stores a double value and updates the base");
 
+    uint8_t fp_indexed_code[28];
+    EMIT_BE(fp_indexed_code, 0, X_FORM(3, 4, 5, 535, 0)); /* lfsx */
+    EMIT_BE(fp_indexed_code, 1, X_FORM(6, 4, 5, 567, 0)); /* lfsux */
+    EMIT_BE(fp_indexed_code, 2, X_FORM(7, 4, 8, 599, 0)); /* lfdx */
+    EMIT_BE(fp_indexed_code, 3, X_FORM(9, 4, 8, 663, 0)); /* stfsx */
+    EMIT_BE(fp_indexed_code, 4, X_FORM(10, 4, 8, 695, 0)); /* stfsux */
+    EMIT_BE(fp_indexed_code, 5, X_FORM(11, 4, 8, 727, 0)); /* stfdx */
+    EMIT_BE(fp_indexed_code, 6, X_FORM(12, 4, 8, 759, 0)); /* stfdux */
+    uint8_t fp_indexed_memory[48] = { 0 };
+    fp_indexed_memory[4] = 0x3f; fp_indexed_memory[5] = 0xc0;
+    fp_indexed_memory[8] = 0x40; fp_indexed_memory[9] = 0x02;
+    ppu_state_init(&state, fp_indexed_code, sizeof(fp_indexed_code), 0);
+    ppu_set_memory(&state, fp_indexed_memory, sizeof(fp_indexed_memory));
+    state.gpr[5] = 4; state.gpr[8] = 8;
+    state.fpr[9] = -1.5; state.fpr[10] = 2.5;
+    state.fpr[11] = 7.25; state.fpr[12] = -9.5;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[3] == 1.5,
+                "lfsx loads an indexed big-endian single value");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[6] == 1.5 && state.gpr[4] == 4,
+                "lfsux loads single precision and updates its GPR base");
+    state.gpr[4] = 0;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[7] == 2.25,
+                "lfdx loads an indexed big-endian double value");
+    const PpuStepResult stfsx_result = ppu_step(&state);
+    ok &= check(stfsx_result == PPU_STEP_OK,
+                "stfsx executes as an indexed store");
+    ok &= check(fp_indexed_memory[8] == 0xbf && fp_indexed_memory[9] == 0xc0,
+                "stfsx rounds and stores an indexed single value");
+    state.gpr[4] = 4;
+    const PpuStepResult stfsux_result = ppu_step(&state);
+    ok &= check(stfsux_result == PPU_STEP_OK && state.gpr[4] == 12,
+                "stfsux executes and updates its GPR base");
+    ok &= check(fp_indexed_memory[12] == 0x40 && fp_indexed_memory[13] == 0x20,
+                "stfsux stores the indexed single value");
+    state.gpr[4] = 24;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && fp_indexed_memory[32] == 0x40 &&
+                fp_indexed_memory[39] == 0x00,
+                "stfdx stores an indexed big-endian double value");
+    state.gpr[4] = 32;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[4] == 40 &&
+                fp_indexed_memory[40] == 0xc0 && fp_indexed_memory[47] == 0x00,
+                "stfdux stores double precision and updates its GPR base");
+
     uint8_t spr_code[16];
     EMIT_BE(spr_code, 0, SPR_FORM(4, 8, 339)); /* mflr r4 */
     EMIT_BE(spr_code, 1, SPR_FORM(5, 9, 339)); /* mfctr r5 */

@@ -396,6 +396,44 @@ PpuStepResult ppu_step(PpuState *state)
         const uint32_t xo = (insn >> 1) & 0x3ffu;
         const int record = (insn & 1u) != 0;
         uint64_t result;
+        if (xo == 535u || xo == 567u || xo == 599u || xo == 631u ||
+            xo == 663u || xo == 695u || xo == 727u || xo == 759u) {
+            const int is_load = xo == 535u || xo == 567u || xo == 599u || xo == 631u;
+            const int is_single = xo == 535u || xo == 567u || xo == 663u || xo == 695u;
+            const int update = xo == 567u || xo == 631u || xo == 695u || xo == 759u;
+            const size_t width = is_single ? 4u : 8u;
+            const uint64_t base_address = ra == 0 ? 0 : state->gpr[ra];
+            const uint64_t index = state->gpr[rb];
+            uint64_t effective_address;
+            size_t memory_offset;
+            if ((insn & 1u) != 0 || (update && ra == 0))
+                return PPU_STEP_UNSUPPORTED;
+            if (base_address > UINT64_MAX - index)
+                return PPU_STEP_MEMORY_FAULT;
+            effective_address = base_address + index;
+            if ((effective_address & (width - 1u)) != 0 ||
+                !memory_range_offset(state, effective_address, width, &memory_offset))
+                return PPU_STEP_MEMORY_FAULT;
+            if (is_load) {
+                uint64_t value = 0;
+                for (size_t i = 0; i < width; ++i)
+                    value = (value << 8) | state->memory[memory_offset + i];
+                state->fpr[rt] = is_single
+                    ? (double)float_from_bits((uint32_t)value)
+                    : double_from_bits(value);
+            } else {
+                const uint64_t value = is_single
+                    ? float_bits((float)state->fpr[rt])
+                    : double_bits(state->fpr[rt]);
+                for (size_t i = 0; i < width; ++i)
+                    state->memory[memory_offset + i] =
+                        (uint8_t)(value >> ((uint32_t)(width - 1u - i) * 8u));
+            }
+            if (update)
+                state->gpr[ra] = effective_address;
+            state->pc += 4;
+            return PPU_STEP_OK;
+        }
         {
             size_t width = 0;
             int is_load = 0, update = 0, sign_extend = 0;
