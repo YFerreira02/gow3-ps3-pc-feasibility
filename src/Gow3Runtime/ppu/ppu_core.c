@@ -640,8 +640,10 @@ PpuStepResult ppu_step(PpuState *state)
         }
         {
             size_t width = 0;
-            int is_load = 0, update = 0, sign_extend = 0;
+            int is_load = 0, update = 0, sign_extend = 0, byte_reverse = 0;
             switch (xo) {
+            case 534: width = 4; is_load = 1; byte_reverse = 1; break; /* lwbrx */
+            case 790: width = 2; is_load = 1; byte_reverse = 1; break; /* lhbrx */
             case 23: width = 4; is_load = 1; break;  /* lwzx */
             case 55: width = 4; is_load = 1; update = 1; break; /* lwzux */
             case 87: width = 1; is_load = 1; break;  /* lbzx */
@@ -661,6 +663,8 @@ PpuStepResult ppu_step(PpuState *state)
             case 439: width = 2; update = 1; break; /* sthux */
             case 149: width = 8; break;             /* stdx */
             case 181: width = 8; update = 1; break; /* stdux */
+            case 662: width = 4; byte_reverse = 1; break; /* stwbrx */
+            case 918: width = 2; byte_reverse = 1; break; /* sthbrx */
             default: break;
             }
             if (width != 0) {
@@ -676,17 +680,24 @@ PpuStepResult ppu_step(PpuState *state)
                     return PPU_STEP_MEMORY_FAULT;
                 if (is_load) {
                     uint64_t loaded = 0;
-                    for (size_t i = 0; i < width; ++i)
-                        loaded = (loaded << 8) | state->memory[memory_offset + i];
+                    for (size_t i = 0; i < width; ++i) {
+                        if (byte_reverse)
+                            loaded |= (uint64_t)state->memory[memory_offset + i] << (i * 8u);
+                        else
+                            loaded = (loaded << 8) | state->memory[memory_offset + i];
+                    }
                     if (sign_extend && width == 2)
                         loaded = (uint64_t)(int64_t)(int16_t)loaded;
                     else if (sign_extend && width == 4)
                         loaded = (uint64_t)(int64_t)(int32_t)loaded;
                     state->gpr[rt] = loaded;
                 } else {
-                    for (size_t i = 0; i < width; ++i)
-                        state->memory[memory_offset + i] =
-                            (uint8_t)(state->gpr[rt] >> ((uint32_t)(width - 1u - i) * 8u));
+                    for (size_t i = 0; i < width; ++i) {
+                        const uint32_t shift = byte_reverse
+                            ? (uint32_t)(i * 8u)
+                            : (uint32_t)(width - 1u - i) * 8u;
+                        state->memory[memory_offset + i] = (uint8_t)(state->gpr[rt] >> shift);
+                    }
                 }
                 if (update)
                     state->gpr[ra] = indexed_address;

@@ -879,6 +879,34 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[9] == 0xabcdef01,
                 "zero-byte lswx leaves its starting GPR unmodified");
 
+    static uint8_t byte_reverse_code[20];
+    EMIT_BE(byte_reverse_code, 0, X_FORM(5, 3, 4, 534, 0)); /* lwbrx */
+    EMIT_BE(byte_reverse_code, 1, X_FORM(6, 3, 4, 790, 0)); /* lhbrx */
+    EMIT_BE(byte_reverse_code, 2, X_FORM(7, 3, 8, 662, 0)); /* stwbrx */
+    EMIT_BE(byte_reverse_code, 3, X_FORM(9, 3, 10, 918, 0));/* sthbrx */
+    EMIT_BE(byte_reverse_code, 4, X_FORM(5, 3, 4, 534, 0)); /* misaligned lwbrx */
+    static uint8_t byte_reverse_memory[16];
+    for (size_t i = 0; i < sizeof(byte_reverse_memory); ++i) byte_reverse_memory[i] = 0;
+    byte_reverse_memory[4] = 0x12; byte_reverse_memory[5] = 0x34;
+    byte_reverse_memory[6] = 0x56; byte_reverse_memory[7] = 0x78;
+    ppu_state_init(&state, byte_reverse_code, sizeof(byte_reverse_code), 0);
+    ppu_set_memory(&state, byte_reverse_memory, sizeof(byte_reverse_memory));
+    state.gpr[3] = 4; state.gpr[4] = 0; state.gpr[8] = 4; state.gpr[10] = 8;
+    state.gpr[7] = 0xaabbccdd; state.gpr[9] = 0xabcd;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[5] == 0x78563412,
+                "lwbrx loads and reverses a big-endian word");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == 0x3412,
+                "lhbrx loads and reverses a big-endian halfword");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && byte_reverse_memory[8] == 0xdd &&
+                byte_reverse_memory[11] == 0xaa,
+                "stwbrx stores a word in byte-reversed order");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && byte_reverse_memory[12] == 0xcd &&
+                byte_reverse_memory[13] == 0xab,
+                "sthbrx stores a halfword in byte-reversed order");
+    state.gpr[4] = 1;
+    ok &= check(ppu_step(&state) == PPU_STEP_MEMORY_FAULT && state.pc == 16,
+                "misaligned lwbrx faults without advancing PC");
+
     static uint8_t elf[128] = { 0 };
     elf[0] = 0x7f; elf[1] = 'E'; elf[2] = 'L'; elf[3] = 'F';
     elf[4] = 2; elf[5] = 2; elf[6] = 1;
