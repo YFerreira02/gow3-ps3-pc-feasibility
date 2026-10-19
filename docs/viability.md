@@ -21,13 +21,15 @@ Crear un runtime independiente de Windows para la versión PS3 de *God of War II
 
 `src/Gow3Runtime/ppu/` now contains a small C reference interpreter and a Windows x64 harness. Supported instructions are `addi`, `addis`, `ori`, unconditional `b` (relative/absolute addressing and link state), `lwz`, `stw`, `lbz`, and `stb`. Loads/stores use an explicitly bounded big-endian memory buffer; out-of-range and misaligned word accesses fault without advancing the PC. The interpreter rejects invalid fetches and returns unsupported for all other opcodes. The harness uses synthetic instruction bytes, not a PS3 executable.
 
+The same folder contains `ppu_elf.c`, a metadata-only ELF64 parser requiring big-endian encoding and machine ID PPC64. It checks program-header and segment file bounds, file-size versus memory-size consistency, address overflow, and that the entry lies within an executable load segment. It does not read paths, map segments, parse SELF containers, decrypt, or execute anything. Its input is a synthetic in-memory fixture only.
+
 Build and run:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Build-PpuPrototype.ps1
 ```
 
-Recorded local result: the native x64 harness built with Zig 0.17.0, and nineteen checks passed: arithmetic/immediate semantics, OR immediate, sign extension, bounds rejection, unsupported-opcode stop behavior, relative/absolute branches and link state, big-endian word/byte loads and stores, and memory bounds/alignment faults. Output is under ignored `work/`; it is not committed. A prior Zig 0.15.2 distribution was incomplete and was not used for the successful build.
+Recorded local result: the native x64 harness built with Zig 0.17.0, and twenty-five checks passed: arithmetic/immediate semantics, OR immediate, sign extension, bounds rejection, unsupported-opcode stop behavior, relative/absolute branches and link state, big-endian word/byte loads and stores, memory bounds/alignment faults, and ELF architecture/format/segment/entry validation. Output is under ignored `work/`; it is not committed. A prior Zig 0.15.2 distribution was incomplete and was not used for the successful build.
 
 ## Unknowns / Incertidumbres
 

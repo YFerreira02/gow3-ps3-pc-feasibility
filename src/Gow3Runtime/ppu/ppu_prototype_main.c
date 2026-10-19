@@ -1,9 +1,25 @@
 #include "ppu_core.h"
+#include "ppu_elf.h"
 
 typedef void *HANDLE;
 __declspec(dllimport) HANDLE __stdcall GetStdHandle(unsigned long);
 __declspec(dllimport) int __stdcall WriteFile(HANDLE, const void *, unsigned long, unsigned long *, void *);
 __declspec(dllimport) void __stdcall ExitProcess(unsigned int);
+
+static void put_u16_be(uint8_t *p, uint16_t value)
+{
+    p[0] = (uint8_t)(value >> 8); p[1] = (uint8_t)value;
+}
+static void put_u32_be(uint8_t *p, uint32_t value)
+{
+    p[0] = (uint8_t)(value >> 24); p[1] = (uint8_t)(value >> 16);
+    p[2] = (uint8_t)(value >> 8); p[3] = (uint8_t)value;
+}
+static void put_u64_be(uint8_t *p, uint64_t value)
+{
+    put_u32_be(p, (uint32_t)(value >> 32));
+    put_u32_be(p + 4, (uint32_t)value);
+}
 
 #define D_FORM(op, rt, ra, imm) (((uint32_t)(op) << 26) | ((uint32_t)(rt) << 21) | ((uint32_t)(ra) << 16) | (uint16_t)(imm))
 #define EMIT_BE(dst, i, word) do { \
@@ -118,5 +134,38 @@ void entry(void)
     state.gpr[3] = 1;
     ok &= check(ppu_step(&state) == PPU_STEP_MEMORY_FAULT && state.pc == 0,
                 "misaligned word load faults without advancing PC");
+
+    uint8_t elf[128] = { 0 };
+    elf[0] = 0x7f; elf[1] = 'E'; elf[2] = 'L'; elf[3] = 'F';
+    elf[4] = 2; elf[5] = 2; elf[6] = 1;
+    put_u16_be(elf + 16, 2); put_u16_be(elf + 18, 21);
+    put_u32_be(elf + 20, 1); put_u64_be(elf + 24, 0x10000);
+    put_u64_be(elf + 32, 64); put_u16_be(elf + 52, 64);
+    put_u16_be(elf + 54, 56); put_u16_be(elf + 56, 1);
+    put_u32_be(elf + 64, 1); put_u32_be(elf + 68, 5);
+    put_u64_be(elf + 72, 120); put_u64_be(elf + 80, 0x10000);
+    put_u64_be(elf + 96, 8); put_u64_be(elf + 104, 12);
+    PpuElfView view;
+    ok &= check(ppu_elf_parse(elf, sizeof(elf), &view) == PPU_ELF_OK &&
+                view.entry == 0x10000 && view.segment_count == 1 &&
+                view.segments[0].file_size == 8 && view.segments[0].memory_size == 12,
+                "ELF64 big-endian PPC64 load-segment metadata parsed");
+    elf[5] = 1;
+    ok &= check(ppu_elf_parse(elf, sizeof(elf), &view) == PPU_ELF_BAD_FORMAT,
+                "ELF with unsupported little-endian encoding rejected");
+    elf[5] = 2;
+    put_u16_be(elf + 18, 3);
+    ok &= check(ppu_elf_parse(elf, sizeof(elf), &view) == PPU_ELF_UNSUPPORTED_ARCH,
+                "ELF for a non-PPC64 machine rejected");
+    put_u16_be(elf + 18, 21);
+    put_u64_be(elf + 72, 0xfffffff0u);
+    ok &= check(ppu_elf_parse(elf, sizeof(elf), &view) == PPU_ELF_BOUNDS_ERROR,
+                "ELF segment outside the file rejected");
+    put_u64_be(elf + 72, 120);
+    ok &= check(ppu_elf_parse(elf, 90, &view) == PPU_ELF_BOUNDS_ERROR,
+                "truncated ELF program-header table rejected");
+    put_u64_be(elf + 24, 0x20000);
+    ok &= check(ppu_elf_parse(elf, sizeof(elf), &view) == PPU_ELF_NO_EXECUTABLE_ENTRY,
+                "ELF entry outside executable load segments rejected");
     ExitProcess(ok ? 0u : 1u);
 }

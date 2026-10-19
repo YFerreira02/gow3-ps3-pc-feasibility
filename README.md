@@ -17,7 +17,7 @@ Aquí “nativo” significa un programa de Windows con interfaz y renderer prop
 ## Implemented so far / Implementado hasta ahora
 
 - Windows Vulkan probes: the Vega 8 exposes Vulkan 1.2; synthetic triangle and offscreen display paths have been exercised. These are not game benchmarks.
-- Asset-free PPU interpreter prototype: `addi`, `addis`, `ori`, unconditional `b`, `lwz`, `stw`, `lbz`, and `stb`; it has bounded big-endian memory access and explicit stop-on-unsupported behavior. This is a foundation for testing, not a usable emulator.
+- Asset-free PPU interpreter prototype: `addi`, `addis`, `ori`, unconditional `b`, `lwz`, `stw`, `lbz`, and `stb`; it has bounded big-endian memory access and explicit stop-on-unsupported behavior. A separate ELF64 big-endian PPC64 metadata parser validates synthetic files. This is a foundation for testing, not a usable emulator or game loader.
 - No PS3 executable, ISO, firmware, decryption key, or game asset is in the repository.
 
 ## Next gates / Siguientes etapas
@@ -43,6 +43,7 @@ This uses the local Zig compiler under ignored `work/` to build a native Windows
 ## Repository map
 
 - `src/Gow3Runtime/ppu/`: initial asset-free PPU interpreter prototype.
+- `src/Gow3Runtime/ppu/ppu_elf.c`: bounded ELF64 PPC64 metadata parser; it does not load or execute a game.
 - `tools/Build-PpuPrototype.ps1`: build/run command for the PPU prototype.
 - `docs/approach.md`: standalone scope and gates; RPCS3 is excluded.
 - `docs/architecture.md`: component architecture and technical limits.
