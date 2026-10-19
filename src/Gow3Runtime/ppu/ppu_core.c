@@ -433,6 +433,31 @@ PpuStepResult ppu_step(PpuState *state)
         const uint32_t xo = (insn >> 1) & 0x3ffu;
         const int record = (insn & 1u) != 0;
         uint64_t result;
+        if (xo == 792u || xo == 824u) { /* sraw / srawi */
+            const int immediate = xo == 824u;
+            const uint32_t shift = immediate ? rb : (uint32_t)state->gpr[rb] & 0x3fu;
+            const uint32_t source = (uint32_t)state->gpr[rt];
+            const uint32_t sign_fill = (source & 0x80000000u) ? UINT32_MAX : 0u;
+            uint32_t shifted;
+            if (shift == 0) {
+                shifted = source;
+                state->xer_ca = 0;
+            } else if (shift >= 32u) {
+                shifted = sign_fill;
+                state->xer_ca = (uint8_t)(sign_fill != 0);
+            } else {
+                shifted = source >> shift;
+                if (sign_fill != 0)
+                    shifted |= UINT32_MAX << (32u - shift);
+                const uint32_t discarded = source & ((1u << shift) - 1u);
+                state->xer_ca = (uint8_t)(sign_fill != 0 && discarded != 0);
+            }
+            state->gpr[ra] = (uint64_t)(int64_t)(int32_t)shifted;
+            if (record)
+                set_cr0_from_result(state, state->gpr[ra]);
+            state->pc += 4;
+            return PPU_STEP_OK;
+        }
         if (xo == 512u) { /* mcrxr: transfer XER summary bits to a CR field */
             const uint32_t bf = (insn >> 23) & 7u;
             if (record)

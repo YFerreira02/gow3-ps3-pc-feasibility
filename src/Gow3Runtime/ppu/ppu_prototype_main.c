@@ -330,6 +330,28 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[10] == (uint64_t)(int64_t)(int32_t)0x80000001u,
                 "extsw sign-extends the low word");
 
+    uint8_t arithmetic_shift_code[16];
+    EMIT_BE(arithmetic_shift_code, 0, X_FORM(5, 6, 2, 824, 0)); /* srawi */
+    EMIT_BE(arithmetic_shift_code, 1, X_FORM(5, 7, 4, 792, 0)); /* sraw */
+    EMIT_BE(arithmetic_shift_code, 2, X_FORM(5, 8, 2, 824, 1)); /* srawi. */
+    EMIT_BE(arithmetic_shift_code, 3, X_FORM(5, 9, 0, 824, 0)); /* srawi by zero */
+    ppu_state_init(&state, arithmetic_shift_code, sizeof(arithmetic_shift_code), 0);
+    state.gpr[5] = (uint64_t)-16; state.gpr[4] = 2;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == (uint64_t)-4 &&
+                state.xer_ca == 0,
+                "srawi sign-fills the word and leaves CA clear when discarded bits are zero");
+    state.gpr[5] = (uint64_t)-17;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[7] == (uint64_t)-5 &&
+                state.xer_ca == 1,
+                "sraw sets CA when negative one bits are shifted out");
+    state.gpr[5] = (uint64_t)-1;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[8] == UINT64_MAX &&
+                state.xer_ca == 1 && ((state.cr >> 28) & 0x0fu) == 8u,
+                "srawi record form updates CR0 and XER CA");
+    state.gpr[5] = 8;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[9] == 8 && state.xer_ca == 0,
+                "zero-distance srawi clears XER CA");
+
     uint8_t multiply[12];
     EMIT_BE(multiply, 0, D_FORM(7, 4, 3, -3));        /* mulli */
     EMIT_BE(multiply, 1, X_FORM(5, 3, 4, 233, 0));   /* mulld */
