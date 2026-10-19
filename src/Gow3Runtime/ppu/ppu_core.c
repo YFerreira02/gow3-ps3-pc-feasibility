@@ -67,7 +67,9 @@ void ppu_state_init(PpuState *state, const uint8_t *code, size_t code_size, uint
     state->ctr = 0;
     state->cr = 0;
     state->xer_so = 0;
+    state->xer_ov = 0;
     state->xer_ca = 0;
+    state->xer_bc = 0;
     state->code = code;
     state->code_size = code_size;
     state->code_base = 0;
@@ -431,6 +433,46 @@ PpuStepResult ppu_step(PpuState *state)
         const uint32_t xo = (insn >> 1) & 0x3ffu;
         const int record = (insn & 1u) != 0;
         uint64_t result;
+        if (xo == 533u || xo == 661u) { /* lswx / stswx */
+            const int is_load = xo == 533u;
+            const uint32_t byte_count = state->xer_bc & 0x7fu;
+            if (record)
+                return PPU_STEP_UNSUPPORTED;
+            if (byte_count == 0) {
+                state->pc += 4;
+                return PPU_STEP_OK;
+            }
+            const uint32_t register_count = (byte_count + 3u) / 4u;
+            int ra_overlaps = 0, rb_overlaps = 0;
+            for (uint32_t i = 0; i < register_count; ++i) {
+                const uint32_t reg = (rt + i) & 31u;
+                if (ra != 0 && reg == ra) ra_overlaps = 1;
+                if (reg == rb) rb_overlaps = 1;
+            }
+            if (is_load && (ra_overlaps || rb_overlaps || (ra == 0 && rt == 0)))
+                return PPU_STEP_UNSUPPORTED;
+            const uint64_t indexed_base = ra == 0 ? 0 : state->gpr[ra];
+            if (indexed_base > UINT64_MAX - state->gpr[rb])
+                return PPU_STEP_MEMORY_FAULT;
+            const uint64_t string_address = indexed_base + state->gpr[rb];
+            size_t memory_offset;
+            if (!memory_range_offset(state, string_address, byte_count, &memory_offset))
+                return PPU_STEP_MEMORY_FAULT;
+            for (uint32_t byte = 0; byte < byte_count; ++byte) {
+                const uint32_t reg = (rt + byte / 4u) & 31u;
+                const uint32_t in_word = byte & 3u;
+                const size_t offset = memory_offset + byte;
+                if (is_load) {
+                    if (in_word == 0)
+                        state->gpr[reg] = 0;
+                    state->gpr[reg] |= (uint64_t)state->memory[offset] << (24u - in_word * 8u);
+                } else {
+                    state->memory[offset] = (uint8_t)(state->gpr[reg] >> (24u - in_word * 8u));
+                }
+            }
+            state->pc += 4;
+            return PPU_STEP_OK;
+        }
         if (xo == 535u || xo == 567u || xo == 599u || xo == 631u ||
             xo == 663u || xo == 695u || xo == 727u || xo == 759u) {
             const int is_load = xo == 535u || xo == 567u || xo == 599u || xo == 631u;
@@ -544,13 +586,23 @@ PpuStepResult ppu_step(PpuState *state)
             state->pc += 4;
             return PPU_STEP_OK;
         }
-        if (xo == 339u || xo == 467u) { /* mfspr / mtspr, limited to LR and CTR */
+        if (xo == 339u || xo == 467u) { /* mfspr / mtspr, limited to XER, LR and CTR */
             const uint32_t spr = ((insn >> 16) & 31u) | (((insn >> 11) & 31u) << 5);
-            if (record || (spr != 8u && spr != 9u))
+            if (record || (spr != 1u && spr != 8u && spr != 9u))
                 return PPU_STEP_UNSUPPORTED;
-            if (xo == 339u)
-                state->gpr[rt] = spr == 8u ? state->lr : state->ctr;
-            else if (spr == 8u)
+            if (xo == 339u) {
+                if (spr == 1u)
+                    state->gpr[rt] = ((uint64_t)(state->xer_so & 1u) << 31) |
+                        ((uint64_t)(state->xer_ov & 1u) << 30) |
+                        ((uint64_t)(state->xer_ca & 1u) << 29) | (state->xer_bc & 0x7fu);
+                else
+                    state->gpr[rt] = spr == 8u ? state->lr : state->ctr;
+            } else if (spr == 1u) {
+                state->xer_so = (uint8_t)((state->gpr[rt] >> 31) & 1u);
+                state->xer_ov = (uint8_t)((state->gpr[rt] >> 30) & 1u);
+                state->xer_ca = (uint8_t)((state->gpr[rt] >> 29) & 1u);
+                state->xer_bc = (uint8_t)(state->gpr[rt] & 0x7fu);
+            } else if (spr == 8u)
                 state->lr = state->gpr[rt];
             else
                 state->ctr = state->gpr[rt];

@@ -508,16 +508,19 @@ void entry(void)
                 fp_indexed_memory[40] == 0xc0 && fp_indexed_memory[47] == 0x00,
                 "stfdux stores double precision and updates its GPR base");
 
-    uint8_t spr_code[16];
+    uint8_t spr_code[24];
     EMIT_BE(spr_code, 0, SPR_FORM(4, 8, 339)); /* mflr r4 */
     EMIT_BE(spr_code, 1, SPR_FORM(5, 9, 339)); /* mfctr r5 */
     EMIT_BE(spr_code, 2, SPR_FORM(6, 8, 467)); /* mtlr r6 */
     EMIT_BE(spr_code, 3, SPR_FORM(7, 9, 467)); /* mtctr r7 */
+    EMIT_BE(spr_code, 4, SPR_FORM(8, 1, 339)); /* mfxer r8 */
+    EMIT_BE(spr_code, 5, SPR_FORM(9, 1, 467)); /* mtxer r9 */
     ppu_state_init(&state, spr_code, sizeof(spr_code), 0);
     state.lr = 0x1234;
     state.ctr = 0x5678;
     state.gpr[6] = 0x9abc;
     state.gpr[7] = 0xdef0;
+    state.xer_so = 1; state.xer_ov = 1; state.xer_ca = 0; state.xer_bc = 0x35;
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[4] == 0x1234,
                 "mfspr reads LR");
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[5] == 0x5678,
@@ -526,6 +529,13 @@ void entry(void)
                 "mtspr writes LR");
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.ctr == 0xdef0,
                 "mtspr writes CTR");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK &&
+                state.gpr[8] == (1ull << 31 | 1ull << 30 | 0x35ull),
+                "mfspr reads XER summary, carry, and byte-count fields");
+    state.gpr[9] = (1ull << 31) | (1ull << 30) | 0x2a;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.xer_so == 1 &&
+                state.xer_ov == 1 && state.xer_ca == 0 && state.xer_bc == 0x2a,
+                "mtspr restores modeled XER fields");
 
     uint8_t cr_code[12];
     EMIT_BE(cr_code, 0, X_FORM(4, 0, 0, 19, 0)); /* mfcr r4 */
@@ -745,6 +755,26 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_MEMORY_FAULT && state.pc == 8 &&
                 state.gpr[30] == 0xdeadbeef,
                 "out-of-bounds lmw faults before changing any destination register");
+
+    uint8_t string_code[12];
+    EMIT_BE(string_code, 0, X_FORM(5, 0, 4, 533, 0)); /* lswx r5,0,r4 */
+    EMIT_BE(string_code, 1, X_FORM(7, 0, 4, 661, 0)); /* stswx r7,0,r4 */
+    EMIT_BE(string_code, 2, X_FORM(9, 0, 4, 533, 0)); /* zero-count lswx */
+    uint8_t string_memory[20] = { 0, 0, 0, 0, 0x11, 0x22, 0x33, 0x44,
+                                  0x55, 0x66, 0x77, 0x88 };
+    ppu_state_init(&state, string_code, sizeof(string_code), 0);
+    ppu_set_memory(&state, string_memory, sizeof(string_memory));
+    state.xer_bc = 6; state.gpr[4] = 4;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[5] == 0x11223344 &&
+                state.gpr[6] == 0x55660000,
+                "lswx loads XER byte-count bytes and clears the partial word tail");
+    state.gpr[4] = 8; state.gpr[7] = 0xaabbccdd; state.gpr[8] = 0xeeff0000;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && string_memory[8] == 0xaa &&
+                string_memory[13] == 0xff,
+                "stswx stores XER byte-count bytes from consecutive GPRs");
+    state.xer_bc = 0; state.gpr[4] = 4; state.gpr[9] = 0xabcdef01;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[9] == 0xabcdef01,
+                "zero-byte lswx leaves its starting GPR unmodified");
 
     uint8_t elf[128] = { 0 };
     elf[0] = 0x7f; elf[1] = 'E'; elf[2] = 'L'; elf[3] = 'F';
