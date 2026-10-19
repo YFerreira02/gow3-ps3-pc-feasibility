@@ -15,6 +15,7 @@ typedef enum PpuStepResult {
 
 typedef struct PpuState {
     uint64_t gpr[32];
+    double fpr[32];
     uint64_t pc;
     uint64_t lr;
     uint64_t ctr;

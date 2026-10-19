@@ -33,6 +33,10 @@ static void put_u64_be(uint8_t *p, uint64_t value)
     ((uint32_t)(ra) << 16) | ((uint16_t)(disp) & 0xfffcu) | (uint32_t)(xo))
 #define CR_FORM(bt, ba, bb, xo) ((19u << 26) | ((uint32_t)(bt) << 21) | \
     ((uint32_t)(ba) << 16) | ((uint32_t)(bb) << 11) | ((uint32_t)(xo) << 1))
+#define FP_A(rt, ra, rb, frc, xo) ((63u << 26) | ((uint32_t)(rt) << 21) | \
+    ((uint32_t)(ra) << 16) | ((uint32_t)(rb) << 11) | ((uint32_t)(frc) << 6) | ((uint32_t)(xo) << 1))
+#define FP_X(rt, rb, xo) ((63u << 26) | ((uint32_t)(rt) << 21) | \
+    ((uint32_t)(rb) << 11) | ((uint32_t)(xo) << 1))
 #define EMIT_BE(dst, i, word) do { \
     (dst)[(i) * 4] = (uint8_t)((word) >> 24); \
     (dst)[(i) * 4 + 1] = (uint8_t)((word) >> 16); \
@@ -358,6 +362,34 @@ void entry(void)
     state.xer_ca = 1; state.gpr[3] = UINT64_MAX;
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[9] == 0 && state.xer_ca == 1,
                 "addze adds the carry bit to its register operand");
+
+    uint8_t fp_code[32];
+    EMIT_BE(fp_code, 0, FP_A(3, 1, 2, 0, 21)); /* fadd */
+    EMIT_BE(fp_code, 1, FP_A(4, 1, 2, 0, 20)); /* fsub */
+    EMIT_BE(fp_code, 2, FP_A(5, 1, 0, 2, 25)); /* fmul */
+    EMIT_BE(fp_code, 3, FP_A(6, 2, 1, 0, 18)); /* fdiv */
+    EMIT_BE(fp_code, 4, FP_X(7, 2, 72));  /* fmr */
+    EMIT_BE(fp_code, 5, FP_X(8, 9, 264)); /* fabs */
+    EMIT_BE(fp_code, 6, FP_X(10, 9, 40)); /* fneg */
+    EMIT_BE(fp_code, 7, FP_X(11, 9, 136));/* fnabs */
+    ppu_state_init(&state, fp_code, sizeof(fp_code), 0);
+    state.fpr[1] = -1.5; state.fpr[2] = 2.25; state.fpr[9] = -3.5;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[3] == 0.75,
+                "fadd adds double-precision FPR operands");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[4] == -3.75,
+                "fsub subtracts double-precision FPR operands");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[5] == -3.375,
+                "fmul reads its third FPR operand from FRC");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[6] == -1.5,
+                "fdiv divides double-precision FPR operands");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[7] == 2.25,
+                "fmr copies an FPR value");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[8] == 3.5,
+                "fabs clears the FPR sign bit");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[10] == 3.5,
+                "fneg toggles the FPR sign bit");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[11] == -3.5,
+                "fnabs sets the FPR sign bit");
 
     uint8_t spr_code[16];
     EMIT_BE(spr_code, 0, SPR_FORM(4, 8, 339)); /* mflr r4 */

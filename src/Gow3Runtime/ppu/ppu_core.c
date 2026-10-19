@@ -26,12 +26,29 @@ static uint32_t rotate_mask(uint32_t begin, uint32_t end)
     return mask;
 }
 
+static uint64_t double_bits(double value)
+{
+    union { double d; uint64_t u; } bits;
+    bits.d = value;
+    return bits.u;
+}
+
+static double double_from_bits(uint64_t value)
+{
+    union { double d; uint64_t u; } bits;
+    bits.u = value;
+    return bits.d;
+}
+
 void ppu_state_init(PpuState *state, const uint8_t *code, size_t code_size, uint64_t entry_pc)
 {
     if (!state)
         return;
     for (size_t i = 0; i < 32; ++i)
         state->gpr[i] = 0;
+    volatile double *fpr = state->fpr;
+    for (size_t i = 0; i < 32; ++i)
+        fpr[i] = 0.0;
     state->lr = 0;
     state->ctr = 0;
     state->cr = 0;
@@ -304,6 +321,27 @@ PpuStepResult ppu_step(PpuState *state)
         state->gpr[ra] = result;
         if ((insn & 1u) != 0)
             set_cr0_from_result(state, result);
+        state->pc += 4;
+        return PPU_STEP_OK;
+    }
+    case 63: { /* selected double-precision floating-point operations */
+        const uint32_t xo5 = (insn >> 1) & 31u;
+        const uint32_t xo10 = (insn >> 1) & 0x3ffu;
+        const uint32_t frb = (insn >> 11) & 31u;
+        if ((insn & 1u) != 0)
+            return PPU_STEP_UNSUPPORTED;
+        if (xo5 == 21u) state->fpr[rt] = state->fpr[ra] + state->fpr[frb]; /* fadd */
+        else if (xo5 == 20u) state->fpr[rt] = state->fpr[ra] - state->fpr[frb]; /* fsub */
+        else if (xo5 == 25u) state->fpr[rt] = state->fpr[ra] * state->fpr[(insn >> 6) & 31u]; /* fmul */
+        else if (xo5 == 18u) {
+            const double divisor = state->fpr[frb];
+            if (divisor == 0.0) return PPU_STEP_UNSUPPORTED;
+            state->fpr[rt] = state->fpr[ra] / divisor; /* fdiv */
+        } else if (xo10 == 72u) state->fpr[rt] = state->fpr[frb]; /* fmr */
+        else if (xo10 == 264u) state->fpr[rt] = double_from_bits(double_bits(state->fpr[frb]) & 0x7fffffffffffffffull); /* fabs */
+        else if (xo10 == 136u) state->fpr[rt] = double_from_bits(double_bits(state->fpr[frb]) | 0x8000000000000000ull); /* fnabs */
+        else if (xo10 == 40u) state->fpr[rt] = double_from_bits(double_bits(state->fpr[frb]) ^ 0x8000000000000000ull); /* fneg */
+        else return PPU_STEP_UNSUPPORTED;
         state->pc += 4;
         return PPU_STEP_OK;
     }
