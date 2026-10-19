@@ -14,7 +14,7 @@ if (-not (Test-Path -LiteralPath $zig)) {
 }
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 & $zig cc -target x86_64-windows-gnu -O2 -std=c11 -nostdlib `
-    (Join-Path $source 'ppu_core.c') (Join-Path $source 'ppu_elf.c') `
+    (Join-Path $source 'ppu_core.c') (Join-Path $source 'ppu_elf.c') (Join-Path $source 'ppu_iso.c') (Join-Path $source 'ppu_self.c') `
     (Join-Path $source 'ppu_gui_main.c') `
     '-Wl,-e,entry' '-Wl,--subsystem,windows' -lkernel32 -luser32 -lcomdlg32 `
     -o $exe

@@ -1,5 +1,7 @@
 #include "ppu_core.h"
 #include "ppu_elf.h"
+#include "ppu_iso.h"
+#include "ppu_self.h"
 
 typedef void *HANDLE;
 __declspec(dllimport) HANDLE __stdcall GetStdHandle(unsigned long);
@@ -19,6 +21,25 @@ static void put_u64_be(uint8_t *p, uint64_t value)
 {
     put_u32_be(p, (uint32_t)(value >> 32));
     put_u32_be(p + 4, (uint32_t)value);
+}
+
+static void put_u32_le(uint8_t *p, uint32_t value)
+{
+    p[0] = (uint8_t)value; p[1] = (uint8_t)(value >> 8);
+    p[2] = (uint8_t)(value >> 16); p[3] = (uint8_t)(value >> 24);
+}
+
+static uint8_t put_iso_record(uint8_t *p, uint32_t extent, uint32_t size,
+                              uint8_t flags, const uint8_t *name, uint8_t name_length)
+{
+    const uint8_t record_length = (uint8_t)(33u + name_length + ((name_length & 1u) == 0 ? 1u : 0u));
+    p[0] = record_length;
+    put_u32_le(p + 2, extent);
+    put_u32_le(p + 10, size);
+    p[25] = flags;
+    p[32] = name_length;
+    for (uint8_t i = 0; i < name_length; ++i) p[33u + i] = name[i];
+    return record_length;
 }
 
 #define D_FORM(op, rt, ra, imm) (((uint32_t)(op) << 26) | ((uint32_t)(rt) << 21) | ((uint32_t)(ra) << 16) | (uint16_t)(imm))
@@ -1125,5 +1146,59 @@ void entry(void)
                 "PPU executes conditional branch and skips the next instruction");
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.pc == 0x10014 && state.gpr[4] == 7,
                 "PPU resumes at branch target in mapped ELF segment");
+
+    static uint8_t iso_fixture[24u * 2048u];
+    uint8_t *pvd = iso_fixture + 16u * 2048u;
+    pvd[0] = 1; pvd[1] = 'C'; pvd[2] = 'D'; pvd[3] = '0'; pvd[4] = '0'; pvd[5] = '1'; pvd[6] = 1;
+    put_iso_record(pvd + 156, 20, 2048, 2, (const uint8_t[]){0}, 1);
+    uint8_t *root_directory = iso_fixture + 20u * 2048u;
+    uint8_t dot_name = 0, dotdot_name = 1;
+    uint8_t root_pos = 0;
+    root_pos += put_iso_record(root_directory + root_pos, 20, 2048, 2, &dot_name, 1);
+    root_pos += put_iso_record(root_directory + root_pos, 20, 2048, 2, &dotdot_name, 1);
+    static const uint8_t ps3_game_name[] = "PS3_GAME";
+    put_iso_record(root_directory + root_pos, 21, 2048, 2, ps3_game_name, 8);
+    uint8_t *game_directory = iso_fixture + 21u * 2048u;
+    uint8_t game_pos = 0;
+    game_pos += put_iso_record(game_directory + game_pos, 21, 2048, 2, &dot_name, 1);
+    game_pos += put_iso_record(game_directory + game_pos, 20, 2048, 2, &dotdot_name, 1);
+    static const uint8_t usrdir_name[] = "USRDIR";
+    put_iso_record(game_directory + game_pos, 22, 2048, 2, usrdir_name, 6);
+    uint8_t *usrdir_directory = iso_fixture + 22u * 2048u;
+    uint8_t usrdir_pos = 0;
+    usrdir_pos += put_iso_record(usrdir_directory + usrdir_pos, 22, 2048, 2, &dot_name, 1);
+    usrdir_pos += put_iso_record(usrdir_directory + usrdir_pos, 21, 2048, 2, &dotdot_name, 1);
+    static const uint8_t eboot_name[] = "EBOOT.BIN;1";
+    put_iso_record(usrdir_directory + usrdir_pos, 23, 4, 0, eboot_name, 11);
+    PpuIsoFile iso_eboot;
+    ok &= check(ppu_iso_find_ps3_eboot(iso_fixture, sizeof(iso_fixture), &iso_eboot) == PPU_ISO_OK &&
+                iso_eboot.offset == 23u * 2048u && iso_eboot.size == 4,
+                "ISO reader locates PS3_GAME/USRDIR/EBOOT.BIN without extracting it");
+    iso_fixture[16u * 2048u + 1u] = 'X';
+    ok &= check(ppu_iso_find_ps3_eboot(iso_fixture, sizeof(iso_fixture), &iso_eboot) == PPU_ISO_NO_ISO9660_DESCRIPTOR,
+                "ISO reader rejects an image without an ISO9660 descriptor");
+
+    uint8_t self_header[40] = { 0x53, 0x43, 0x45, 0x00 };
+    put_u32_be(self_header + 4, 2);
+    put_u16_be(self_header + 8, 1);
+    put_u16_be(self_header + 10, 1);
+    put_u32_be(self_header + 12, 32);
+    put_u64_be(self_header + 16, 0x980);
+    put_u64_be(self_header + 24, 0x535b08);
+    PpuSelfView self_view;
+    ok &= check(ppu_self_parse_header(self_header, sizeof(self_header), &self_view) == PPU_SELF_OK &&
+                self_view.version == 2 && self_view.key_type == 1 && self_view.category == 1 &&
+                self_view.metadata_offset == 32 && self_view.header_size == 0x980 &&
+                self_view.data_size == 0x535b08,
+                "SELF parser reads fixed big-endian container metadata");
+    ok &= check(ppu_self_parse_header(self_header, 31, &self_view) == PPU_SELF_TOO_SMALL,
+                "SELF parser rejects truncated fixed header");
+    self_header[0] = 0;
+    ok &= check(ppu_self_parse_header(self_header, sizeof(self_header), &self_view) == PPU_SELF_BAD_MAGIC,
+                "SELF parser rejects an unrelated container signature");
+    self_header[0] = 0x53;
+    put_u32_be(self_header + 12, 0xffffffffu);
+    ok &= check(ppu_self_parse_header(self_header, sizeof(self_header), &self_view) == PPU_SELF_BAD_METADATA_OFFSET,
+                "SELF parser rejects metadata offsets outside the input");
     ExitProcess(ok ? 0u : 1u);
 }

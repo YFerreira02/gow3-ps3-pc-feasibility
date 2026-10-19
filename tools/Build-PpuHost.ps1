@@ -15,7 +15,7 @@ if (-not (Test-Path -LiteralPath $zig)) {
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 & $zig cc -target x86_64-windows-gnu -O2 -std=c11 -nostdlib `
     (Join-Path $source 'ppu_core.c') (Join-Path $source 'ppu_elf.c') `
-    (Join-Path $source 'ppu_host_main.c') `
+    (Join-Path $source 'ppu_iso.c') (Join-Path $source 'ppu_self.c') (Join-Path $source 'ppu_host_main.c') `
     '-Wl,-e,entry' -lkernel32 -lshell32 `
     -o $exe
 if ($LASTEXITCODE -ne 0) { throw "Zig compilation failed with exit code $LASTEXITCODE" }

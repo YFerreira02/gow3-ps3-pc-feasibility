@@ -1,5 +1,7 @@
 #include "ppu_core.h"
 #include "ppu_elf.h"
+#include "ppu_iso.h"
+#include "ppu_self.h"
 
 typedef void *HANDLE;
 typedef uint16_t WCHAR16;
@@ -11,6 +13,9 @@ __declspec(dllimport) HANDLE __stdcall CreateFileW(const WCHAR16 *, uint32_t, ui
 __declspec(dllimport) int __stdcall GetFileSizeEx(HANDLE, int64_t *);
 __declspec(dllimport) int __stdcall ReadFile(HANDLE, void *, uint32_t, uint32_t *, void *);
 __declspec(dllimport) int __stdcall CloseHandle(HANDLE);
+__declspec(dllimport) HANDLE __stdcall CreateFileMappingW(HANDLE, void *, uint32_t, uint32_t, uint32_t, const WCHAR16 *);
+__declspec(dllimport) void *__stdcall MapViewOfFile(HANDLE, uint32_t, uint32_t, uint32_t, size_t);
+__declspec(dllimport) int __stdcall UnmapViewOfFile(const void *);
 __declspec(dllimport) void *__stdcall VirtualAlloc(void *, size_t, uint32_t, uint32_t);
 __declspec(dllimport) int __stdcall VirtualFree(void *, size_t, uint32_t);
 __declspec(dllimport) HANDLE __stdcall GetStdHandle(int32_t);
@@ -26,6 +31,8 @@ __declspec(dllimport) void __stdcall ExitProcess(uint32_t);
 #define MEM_RESERVE 0x2000u
 #define MEM_RELEASE 0x8000u
 #define PAGE_READWRITE 4u
+#define PAGE_READONLY 2u
+#define FILE_MAP_READ 4u
 #define STD_OUTPUT_HANDLE ((int32_t)-11)
 #define MAX_ELF_FILE_SIZE (1024ull * 1024ull * 1024ull)
 #define MAX_GUEST_SPAN (512ull * 1024ull * 1024ull)
@@ -133,6 +140,81 @@ static int load_file(const WCHAR16 *path, uint8_t **bytes, size_t *length)
     return 1;
 }
 
+static int path_has_iso_extension(const WCHAR16 *path)
+{
+    uint32_t length = 0;
+    while (path[length] != 0) ++length;
+    if (length < 4) return 0;
+    const WCHAR16 *suffix = path + length - 4;
+    return suffix[0] == '.' && (suffix[1] == 'i' || suffix[1] == 'I') &&
+           (suffix[2] == 's' || suffix[2] == 'S') && (suffix[3] == 'o' || suffix[3] == 'O');
+}
+
+static int probe_iso(const WCHAR16 *path)
+{
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, 0,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    if (file == INVALID_HANDLE) {
+        write_text("Could not open the ISO in read-only mode.\r\n");
+        return 3;
+    }
+    int64_t signed_size = 0;
+    if (!GetFileSizeEx(file, &signed_size) || signed_size <= 0) {
+        CloseHandle(file);
+        write_text("Could not read the ISO file size.\r\n");
+        return 3;
+    }
+    HANDLE mapping = CreateFileMappingW(file, 0, PAGE_READONLY, 0, 0, 0);
+    if (!mapping) {
+        CloseHandle(file);
+        write_text("Could not create a read-only mapping for the ISO.\r\n");
+        return 3;
+    }
+    const uint8_t *image = (const uint8_t *)MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
+    if (!image) {
+        CloseHandle(mapping);
+        CloseHandle(file);
+        write_text("Could not map the ISO image into memory.\r\n");
+        return 3;
+    }
+    PpuIsoFile eboot;
+    const PpuIsoResult result = ppu_iso_find_ps3_eboot(image, (size_t)signed_size, &eboot);
+    if (result != PPU_ISO_OK) {
+        write_text("ISO/9660 scan did not find PS3_GAME/USRDIR/EBOOT.BIN. Result code: ");
+        write_u64((uint64_t)result);
+        write_text("\r\n");
+    } else {
+        const uint8_t *header = image + (size_t)eboot.offset;
+        write_text("Found EBOOT.BIN at ISO byte offset "); write_u64(eboot.offset);
+        write_text(", size "); write_u64(eboot.size); write_text(" bytes.\r\nHeader: ");
+        if (eboot.size >= 4 && header[0] == 0x7f && header[1] == 'E' && header[2] == 'L' && header[3] == 'F')
+            write_text("raw ELF\r\n");
+        else if (eboot.size >= 4 && header[0] == 'S' && header[1] == 'C' && header[2] == 'E' && header[3] == 0) {
+            PpuSelfView self;
+            const PpuSelfResult self_result = ppu_self_parse_header(header, (size_t)eboot.size, &self);
+            if (self_result == PPU_SELF_OK) {
+                write_text("SCE SELF header parsed (read-only): version "); write_u64(self.version);
+                write_text(", key type "); write_u64(self.key_type);
+                write_text(", category "); write_u64(self.category);
+                write_text(", metadata offset "); write_u64(self.metadata_offset);
+                write_text(", header size "); write_u64(self.header_size);
+                write_text(", data size "); write_u64(self.data_size); write_text(" bytes.\r\n");
+            } else {
+                write_text("SCE magic found, but fixed SELF header validation failed. Code: ");
+                write_u64((uint64_t)self_result); write_text("\r\n");
+            }
+            write_text("This reports container metadata only; encrypted certification and ELF segments are not loaded.\r\n");
+        }
+        else
+            write_text("unrecognized\r\n");
+        write_text("The disc image was only read through a memory map; no files were extracted or copied.\r\n");
+    }
+    UnmapViewOfFile(image);
+    CloseHandle(mapping);
+    CloseHandle(file);
+    return result == PPU_ISO_OK ? 0 : 4;
+}
+
 static int host_main(void)
 {
     int argument_count = 0;
@@ -149,6 +231,12 @@ static int host_main(void)
         write_text("Invalid instruction budget. Use a positive decimal integer.\r\n");
         LocalFree(arguments);
         return 2;
+    }
+
+    if (path_has_iso_extension(arguments[1])) {
+        const int result = probe_iso(arguments[1]);
+        LocalFree(arguments);
+        return result;
     }
 
     uint8_t *file_bytes = 0;

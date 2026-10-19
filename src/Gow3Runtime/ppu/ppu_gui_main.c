@@ -1,5 +1,7 @@
 #include "ppu_core.h"
 #include "ppu_elf.h"
+#include "ppu_iso.h"
+#include "ppu_self.h"
 #include <stdint.h>
 
 typedef void *HANDLE;
@@ -54,6 +56,9 @@ __declspec(dllimport) HANDLE __stdcall CreateFileW(const WCHAR16 *, DWORD, DWORD
 __declspec(dllimport) BOOL __stdcall GetFileSizeEx(HANDLE, int64_t *);
 __declspec(dllimport) BOOL __stdcall ReadFile(HANDLE, void *, DWORD, DWORD *, void *);
 __declspec(dllimport) BOOL __stdcall CloseHandle(HANDLE);
+__declspec(dllimport) HANDLE __stdcall CreateFileMappingW(HANDLE, void *, DWORD, DWORD, DWORD, const WCHAR16 *);
+__declspec(dllimport) void *__stdcall MapViewOfFile(HANDLE, DWORD, DWORD, DWORD, size_t);
+__declspec(dllimport) BOOL __stdcall UnmapViewOfFile(const void *);
 __declspec(dllimport) void *__stdcall VirtualAlloc(void *, size_t, DWORD, DWORD);
 __declspec(dllimport) BOOL __stdcall VirtualFree(void *, size_t, DWORD);
 __declspec(dllimport) void __stdcall ExitProcess(uint32_t);
@@ -67,6 +72,8 @@ __declspec(dllimport) void __stdcall ExitProcess(uint32_t);
 #define MEM_RESERVE 0x2000u
 #define MEM_RELEASE 0x8000u
 #define PAGE_READWRITE 4u
+#define PAGE_READONLY 2u
+#define FILE_MAP_READ 4u
 #define WS_CHILD 0x40000000u
 #define WS_VISIBLE 0x10000000u
 #define WS_BORDER 0x00800000u
@@ -212,38 +219,13 @@ static void append_u64(WCHAR16 *buffer, uint32_t capacity, uint64_t value)
     }
 }
 
-static void run_selected_file(void)
+static int execute_elf_bytes(const uint8_t *file_bytes, size_t file_size, uint64_t budget)
 {
-    GetWindowTextW(g_path_edit, g_selected_path, 32768);
-    if (g_selected_path[0] == 0) {
-        set_status(L"Selecciona un archivo primero.");
-        return;
-    }
-    if (path_has_extension(g_selected_path, L".iso") || path_has_extension(g_selected_path, L".zip")) {
-        set_status(L"Este prototipo no abre ISO/ZIP. Acepta un ELF PPC64 big-endian ya descifrado; no extrae el juego.");
-        return;
-    }
-    WCHAR16 budget_text[64];
-    GetWindowTextW(g_budget_edit, budget_text, 64);
-    uint64_t budget = 0;
-    if (!parse_budget_text(budget_text, &budget)) {
-        set_status(L"El límite debe ser un entero decimal positivo.");
-        return;
-    }
-
-    set_status(L"Leyendo y validando ELF...");
-    uint8_t *file_bytes = 0;
-    size_t file_size = 0;
-    if (!load_file(g_selected_path, &file_bytes, &file_size)) {
-        set_status(L"No se pudo leer el archivo o supera el límite de 1 GiB.");
-        return;
-    }
     PpuElfView elf;
     const PpuElfResult parsed = ppu_elf_parse(file_bytes, file_size, &elf);
     if (parsed != PPU_ELF_OK) {
-        VirtualFree(file_bytes, 0, MEM_RELEASE);
-        set_status(L"Archivo rechazado: se requiere ELF64 big-endian PPC64 crudo. EBOOT SELF y juegos no son compatibles aún.");
-        return;
+        set_status(L"Archivo rechazado: se requiere ELF64 big-endian PPC64 crudo. SELF cifrado todavía no es compatible.");
+        return 0;
     }
 
     uint64_t guest_base = UINT64_MAX, guest_end = 0;
@@ -254,24 +236,21 @@ static void run_selected_file(void)
         if (end > guest_end) guest_end = end;
     }
     if (guest_base == UINT64_MAX || guest_end <= guest_base || guest_end - guest_base > MAX_GUEST_SPAN) {
-        VirtualFree(file_bytes, 0, MEM_RELEASE);
         set_status(L"El rango de memoria del ELF está vacío o supera 512 MiB.");
-        return;
+        return 0;
     }
     const size_t guest_size = (size_t)(guest_end - guest_base);
     uint8_t *guest = (uint8_t *)VirtualAlloc(0, guest_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (!guest) {
-        VirtualFree(file_bytes, 0, MEM_RELEASE);
         set_status(L"Windows no pudo reservar memoria para el ELF.");
-        return;
+        return 0;
     }
     const PpuElfResult loaded = ppu_elf_load_segments(file_bytes, file_size, &elf,
                                                        guest_base, guest, guest_size);
-    VirtualFree(file_bytes, 0, MEM_RELEASE);
     if (loaded != PPU_ELF_OK) {
         VirtualFree(guest, 0, MEM_RELEASE);
         set_status(L"No se pudieron mapear los segmentos ELF en memoria.");
-        return;
+        return 0;
     }
 
     PpuState cpu;
@@ -303,6 +282,126 @@ static void run_selected_file(void)
     append_text(report, 512, L"Este prototipo no ejecuta todavía God of War III ni renderiza Vulkan.");
     set_status(report);
     VirtualFree(guest, 0, MEM_RELEASE);
+    return result == PPU_STEP_SYSCALL || result == PPU_STEP_LIMIT_REACHED;
+}
+
+static void probe_iso_and_run(HWND window, const WCHAR16 *path, uint64_t budget)
+{
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, 0,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    if (file == INVALID_HANDLE_VALUE) {
+        set_status(L"No se pudo abrir la ISO en modo lectura.");
+        return;
+    }
+    int64_t signed_size = 0;
+    if (!GetFileSizeEx(file, &signed_size) || signed_size <= 0) {
+        CloseHandle(file);
+        set_status(L"No se pudo obtener el tamaño de la ISO.");
+        return;
+    }
+    const uint64_t image_size = (uint64_t)signed_size;
+    if (image_size > SIZE_MAX) {
+        CloseHandle(file);
+        set_status(L"La imagen ISO supera el rango direccionable del proceso.");
+        return;
+    }
+    HANDLE mapping = CreateFileMappingW(file, 0, PAGE_READONLY, 0, 0, 0);
+    if (!mapping) {
+        CloseHandle(file);
+        set_status(L"Windows no pudo mapear la ISO en modo lectura.");
+        return;
+    }
+    const uint8_t *image = (const uint8_t *)MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
+    if (!image) {
+        CloseHandle(mapping);
+        CloseHandle(file);
+        set_status(L"Windows no pudo acceder a la vista de lectura de la ISO.");
+        return;
+    }
+    PpuIsoFile eboot;
+    const PpuIsoResult found = ppu_iso_find_ps3_eboot(image, (size_t)image_size, &eboot);
+    if (found != PPU_ISO_OK) {
+        UnmapViewOfFile(image);
+        CloseHandle(mapping);
+        CloseHandle(file);
+        if (found == PPU_ISO_GAME_PATH_NOT_FOUND)
+            set_status(L"ISO leída sin cambios, pero no apareció PS3_GAME/USRDIR/EBOOT.BIN en ISO9660.");
+        else
+            set_status(L"No se reconoció el directorio ISO9660 del disco; no se escribió ni extrajo ningún archivo.");
+        return;
+    }
+    const uint8_t *eboot_bytes = image + (size_t)eboot.offset;
+    if (eboot.size >= 4 && eboot_bytes[0] == 0x7f && eboot_bytes[1] == 'E' &&
+        eboot_bytes[2] == 'L' && eboot_bytes[3] == 'F') {
+        WCHAR16 message[256] = L"EBOOT.BIN encontrado dentro de ISO; tamaño ";
+        append_u64(message, 256, eboot.size);
+        append_text(message, 256, L" bytes. Ejecutando como ELF desde el mapa de solo lectura...\r\n");
+        set_status(message);
+        execute_elf_bytes(eboot_bytes, (size_t)eboot.size, budget);
+    } else if (eboot.size >= 4 && eboot_bytes[0] == 'S' && eboot_bytes[1] == 'C' &&
+               eboot_bytes[2] == 'E' && eboot_bytes[3] == 0) {
+        WCHAR16 message[512] = L"EBOOT.BIN SELF localizado en ISO (";
+        append_u64(message, 512, eboot.size);
+        append_text(message, 512, L" bytes). ");
+        PpuSelfView self;
+        const PpuSelfResult parsed = ppu_self_parse_header(eboot_bytes, (size_t)eboot.size, &self);
+        if (parsed == PPU_SELF_OK) {
+            append_text(message, 512, L"Cabecera: version "); append_u64(message, 512, self.version);
+            append_text(message, 512, L", key type "); append_u64(message, 512, self.key_type);
+            append_text(message, 512, L", category "); append_u64(message, 512, self.category);
+            append_text(message, 512, L", metadata offset "); append_u64(message, 512, self.metadata_offset);
+            append_text(message, 512, L", header "); append_u64(message, 512, self.header_size);
+            append_text(message, 512, L", data "); append_u64(message, 512, self.data_size);
+            append_text(message, 512, L" bytes.\r\n");
+        } else {
+            append_text(message, 512, L"la cabecera fija es invalida (codigo ");
+            append_u64(message, 512, (uint64_t)parsed); append_text(message, 512, L").\r\n");
+        }
+        append_text(message, 512, L"Solo se leyeron metadatos; no se descifro ni ejecuto el juego. ISO sin extraccion ni copia.");
+        set_status(message);
+    } else {
+        set_status(L"EBOOT.BIN apareció dentro de la ISO, pero su cabecera no es ELF ni SELF reconocido.");
+    }
+    UnmapViewOfFile(image);
+    CloseHandle(mapping);
+    CloseHandle(file);
+    (void)window;
+}
+
+static void run_selected_file(void)
+{
+    GetWindowTextW(g_path_edit, g_selected_path, 32768);
+    if (g_selected_path[0] == 0) {
+        set_status(L"Selecciona un archivo primero.");
+        return;
+    }
+    WCHAR16 budget_text[64];
+    GetWindowTextW(g_budget_edit, budget_text, 64);
+    uint64_t budget = 0;
+    if (!parse_budget_text(budget_text, &budget)) {
+        set_status(L"El límite debe ser un entero decimal positivo.");
+        return;
+    }
+
+    if (path_has_extension(g_selected_path, L".zip")) {
+        set_status(L"ZIP no compatible. Selecciona la ISO o un ELF.");
+        return;
+    }
+    if (path_has_extension(g_selected_path, L".iso")) {
+        set_status(L"Abriendo la ISO en modo lectura y buscando EBOOT.BIN...");
+        probe_iso_and_run(0, g_selected_path, budget);
+        return;
+    }
+    set_status(L"Leyendo y validando ELF...");
+    uint8_t *file_bytes = 0;
+    size_t file_size = 0;
+    if (!load_file(g_selected_path, &file_bytes, &file_size)) {
+        set_status(L"No se pudo leer el archivo o supera el límite de 1 GiB.");
+        return;
+    }
+    set_status(L"Leyendo y validando ELF en memoria...");
+    execute_elf_bytes(file_bytes, file_size, budget);
+    VirtualFree(file_bytes, 0, MEM_RELEASE);
 }
 
 static void browse_for_file(HWND window)
