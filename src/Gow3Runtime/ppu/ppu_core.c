@@ -256,7 +256,7 @@ PpuStepResult ppu_step(PpuState *state)
     }
     case 31: { /* selected common X-form integer instructions */
         const uint32_t rb = (insn >> 11) & 31u;
-        const uint32_t xo = (insn >> 1) & 0x1ffu;
+        const uint32_t xo = (insn >> 1) & 0x3ffu;
         const int record = (insn & 1u) != 0;
         uint64_t result;
         switch (xo) {
@@ -269,6 +269,29 @@ PpuStepResult ppu_step(PpuState *state)
             result = state->gpr[rb] - state->gpr[ra];
             break;
         case 28: result = state->gpr[ra] & state->gpr[rb]; break; /* and */
+        case 24: { /* slw */
+            const uint64_t shift = state->gpr[rb];
+            result = (shift & ~31ull) != 0 ? 0 : (uint32_t)state->gpr[ra] << (shift & 31u);
+            break;
+        }
+        case 536: { /* srw */
+            const uint64_t shift = state->gpr[rb];
+            result = (shift & ~31ull) != 0 ? 0 : (uint32_t)state->gpr[ra] >> (shift & 31u);
+            break;
+        }
+        case 26: { /* cntlzw */
+            uint32_t value = (uint32_t)state->gpr[ra];
+            uint32_t count = 0;
+            while (count < 32u && (value & 0x80000000u) == 0) {
+                ++count;
+                value <<= 1;
+            }
+            result = count;
+            break;
+        }
+        case 954: result = (uint64_t)(int64_t)(int8_t)state->gpr[ra]; break; /* extsb */
+        case 922: result = (uint64_t)(int64_t)(int16_t)state->gpr[ra]; break; /* extsh */
+        case 986: result = (uint64_t)(int64_t)(int32_t)state->gpr[ra]; break; /* extsw */
         case 316: result = state->gpr[ra] ^ state->gpr[rb]; break; /* xor */
         case 444: result = state->gpr[ra] | state->gpr[rb]; break; /* or */
         default: return PPU_STEP_UNSUPPORTED;

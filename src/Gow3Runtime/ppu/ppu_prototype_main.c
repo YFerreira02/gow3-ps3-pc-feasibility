@@ -209,6 +209,38 @@ void entry(void)
                 ((state.cr >> 30) & 1u) == 1u,
                 "X-form or record updates CR0");
 
+    uint8_t word_ops[24];
+    EMIT_BE(word_ops, 0, X_FORM(5, 3, 4, 24, 0));  /* slw */
+    EMIT_BE(word_ops, 1, X_FORM(6, 3, 4, 536, 0)); /* srw */
+    EMIT_BE(word_ops, 2, X_FORM(7, 3, 0, 26, 0));  /* cntlzw */
+    EMIT_BE(word_ops, 3, X_FORM(8, 3, 0, 954, 0)); /* extsb */
+    EMIT_BE(word_ops, 4, X_FORM(9, 3, 0, 922, 0)); /* extsh */
+    EMIT_BE(word_ops, 5, X_FORM(10, 3, 0, 986, 0));/* extsw */
+    ppu_state_init(&state, word_ops, sizeof(word_ops), 0);
+    state.gpr[3] = 0x80000001u;
+    state.gpr[4] = 1;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[5] == 2,
+                "slw shifts the low word and zero-extends");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == 0x40000000,
+                "srw performs a logical low-word shift");
+    state.pc = 0;
+    state.gpr[4] = 32;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[5] == 0 &&
+                ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == 0,
+                "word shifts produce zero when the shift amount is at least 32");
+    state.gpr[3] = 0x00100000;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[7] == 11,
+                "cntlzw counts leading zero bits in a word");
+    state.gpr[3] = 0x80;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[8] == (uint64_t)-128,
+                "extsb sign-extends the low byte");
+    state.gpr[3] = 0x8001;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[9] == (uint64_t)-32767,
+                "extsh sign-extends the low halfword");
+    state.gpr[3] = 0x80000001u;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[10] == (uint64_t)(int64_t)(int32_t)0x80000001u,
+                "extsw sign-extends the low word");
+
     uint8_t halfword_code[12];
     EMIT_BE(halfword_code, 0, D_FORM(40, 7, 0, 0)); /* lhz r7,0(0) */
     EMIT_BE(halfword_code, 1, D_FORM(42, 8, 0, 0)); /* lha r8,0(0) */
