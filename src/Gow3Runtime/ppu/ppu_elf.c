@@ -71,3 +71,29 @@ PpuElfResult ppu_elf_parse(const uint8_t *file, size_t file_size, PpuElfView *vi
     view->entry = entry;
     return PPU_ELF_OK;
 }
+
+PpuElfResult ppu_elf_load_segments(const uint8_t *file, size_t file_size,
+                                  const PpuElfView *view, uint64_t guest_base,
+                                  uint8_t *memory, size_t memory_size)
+{
+    if (!file || !view || !memory || view->segment_count > PPU_ELF_MAX_LOAD_SEGMENTS)
+        return PPU_ELF_BAD_ARGUMENT;
+    for (uint16_t i = 0; i < view->segment_count; ++i) {
+        const PpuElfSegment *segment = &view->segments[i];
+        if (segment->virtual_address < guest_base ||
+            !range_fits(segment->file_offset, segment->file_size, file_size) ||
+            segment->file_size > segment->memory_size)
+            return PPU_ELF_BOUNDS_ERROR;
+        const uint64_t memory_offset = segment->virtual_address - guest_base;
+        if (!range_fits(memory_offset, segment->memory_size, memory_size))
+            return PPU_ELF_BOUNDS_ERROR;
+
+        uint8_t *destination = memory + (size_t)memory_offset;
+        const uint8_t *source = file + (size_t)segment->file_offset;
+        for (uint64_t byte = 0; byte < segment->file_size; ++byte)
+            destination[byte] = source[byte];
+        for (uint64_t byte = segment->file_size; byte < segment->memory_size; ++byte)
+            destination[byte] = 0;
+    }
+    return PPU_ELF_OK;
+}

@@ -187,5 +187,20 @@ void entry(void)
     put_u64_be(elf + 24, 0x20000);
     ok &= check(ppu_elf_parse(elf, sizeof(elf), &view) == PPU_ELF_NO_EXECUTABLE_ENTRY,
                 "ELF entry outside executable load segments rejected");
+    put_u64_be(elf + 24, 0x10000);
+    elf[120] = 0xde; elf[121] = 0xad; elf[122] = 0xbe; elf[123] = 0xef;
+    elf[124] = 0xca; elf[125] = 0xfe; elf[126] = 0xba; elf[127] = 0xbe;
+    ok &= check(ppu_elf_parse(elf, sizeof(elf), &view) == PPU_ELF_OK,
+                "ELF fixture reparsed before segment loading");
+    uint8_t guest_memory[12];
+    for (size_t i = 0; i < sizeof(guest_memory); ++i) guest_memory[i] = 0xcc;
+    ok &= check(ppu_elf_load_segments(elf, sizeof(elf), &view, 0x10000,
+                                      guest_memory, sizeof(guest_memory)) == PPU_ELF_OK &&
+                guest_memory[0] == 0xde && guest_memory[3] == 0xef &&
+                guest_memory[7] == 0xbe && guest_memory[8] == 0 && guest_memory[11] == 0,
+                "ELF segment bytes copied and BSS tail zero-filled");
+    ok &= check(ppu_elf_load_segments(elf, sizeof(elf), &view, 0x10000,
+                                      guest_memory, sizeof(guest_memory) - 1) == PPU_ELF_BOUNDS_ERROR,
+                "ELF segment outside guest memory rejected");
     ExitProcess(ok ? 0u : 1u);
 }

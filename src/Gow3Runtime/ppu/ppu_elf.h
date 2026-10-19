@@ -31,5 +31,8 @@ typedef struct PpuElfView {
 } PpuElfView;
 
 PpuElfResult ppu_elf_parse(const uint8_t *file, size_t file_size, PpuElfView *view);
+PpuElfResult ppu_elf_load_segments(const uint8_t *file, size_t file_size,
+                                  const PpuElfView *view, uint64_t guest_base,
+                                  uint8_t *memory, size_t memory_size);
 
 #endif
