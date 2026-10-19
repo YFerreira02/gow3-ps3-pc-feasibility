@@ -19,12 +19,16 @@ typedef struct PpuState {
     uint32_t cr;
     const uint8_t *code;
     size_t code_size;
+    uint64_t code_base;
     uint8_t *memory;
     size_t memory_size;
+    uint64_t memory_base;
 } PpuState;
 
 void ppu_state_init(PpuState *state, const uint8_t *code, size_t code_size, uint64_t entry_pc);
+void ppu_set_code_base(PpuState *state, uint64_t code_base);
 void ppu_set_memory(PpuState *state, uint8_t *memory, size_t memory_size);
+void ppu_set_memory_at(PpuState *state, uint8_t *memory, size_t memory_size, uint64_t guest_base);
 PpuStepResult ppu_step(PpuState *state);
 
 #endif

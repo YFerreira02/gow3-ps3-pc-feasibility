@@ -202,5 +202,17 @@ void entry(void)
     ok &= check(ppu_elf_load_segments(elf, sizeof(elf), &view, 0x10000,
                                       guest_memory, sizeof(guest_memory) - 1) == PPU_ELF_BOUNDS_ERROR,
                 "ELF segment outside guest memory rejected");
+    put_u32_be(elf + 120, D_FORM(14, 3, 0, 5));
+    put_u32_be(elf + 124, D_FORM(14, 4, 3, 7));
+    ok &= check(ppu_elf_load_segments(elf, sizeof(elf), &view, 0x10000,
+                                      guest_memory, sizeof(guest_memory)) == PPU_ELF_OK,
+                "synthetic executable segment loaded for PPU integration");
+    ppu_state_init(&state, guest_memory, sizeof(guest_memory), view.entry);
+    ppu_set_code_base(&state, 0x10000);
+    ppu_set_memory_at(&state, guest_memory, sizeof(guest_memory), 0x10000);
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.pc == 0x10004 && state.gpr[3] == 5,
+                "PPU fetches first instruction from ELF virtual entry address");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.pc == 0x10008 && state.gpr[4] == 12,
+                "PPU executes sequential instruction from mapped ELF segment");
     ExitProcess(ok ? 0u : 1u);
 }
