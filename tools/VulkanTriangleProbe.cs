@@ -119,7 +119,7 @@ public static class VulkanTriangleProbe
         IntPtr attachmentMem=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(AttachmentDescription))),refMem=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(AttachmentReference))),subpassMem=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(SubpassDescription))),depMem=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(SubpassDependency))),infoMem=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(RenderPassInfo)));
         try
         {
-            Marshal.StructureToPtr(new AttachmentDescription{flags=0,format=format,samples=1,loadOp=1,storeOp=0,stencilLoad=2,stencilStore=2,initialLayout=0,finalLayout=1000001002},attachmentMem,false);
+            Marshal.StructureToPtr(new AttachmentDescription{flags=0,format=format,samples=1,loadOp=1,storeOp=0,stencilLoad=2,stencilStore=1,initialLayout=0,finalLayout=1000001002},attachmentMem,false);
             Marshal.StructureToPtr(new AttachmentReference{attachment=0,layout=2},refMem,false);
             Marshal.StructureToPtr(new SubpassDescription{flags=0,bindPoint=0,inputCount=0,inputs=IntPtr.Zero,colorCount=1,colors=refMem,resolves=IntPtr.Zero,depth=IntPtr.Zero,preserveCount=0,preserves=IntPtr.Zero},subpassMem,false);
             Marshal.StructureToPtr(new SubpassDependency{srcSubpass=UInt32.MaxValue,dstSubpass=0,srcStage=1,dstStage=0x400,srcAccess=0,dstAccess=0x100,flags=0},depMem,false);
@@ -160,7 +160,7 @@ public static class VulkanTriangleProbe
         IntPtr attachment=Marshal.AllocHGlobal(IntPtr.Size),mem=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(FramebufferInfo)));try{Marshal.WriteIntPtr(attachment,imageView);var info=new FramebufferInfo{sType=37,pNext=IntPtr.Zero,flags=0,renderPass=renderPass,attachmentCount=1,attachments=attachment,width=width,height=height,layers=1};Marshal.StructureToPtr(info,mem,false);IntPtr fb;Check(Dev<CreateFramebuffer>(getDev,device,"vkCreateFramebuffer")(device,mem,IntPtr.Zero,out fb),"vkCreateFramebuffer");return fb;}finally{Marshal.FreeHGlobal(mem);Marshal.FreeHGlobal(attachment);}
     }
 
-    public static int Run(IntPtr hwnd, string preferred, string vertexPath, string fragmentPath)
+    public static int Run(IntPtr hwnd, string preferred, string vertexPath, string fragmentPath, int frameCount)
     {
         IntPtr loader = LoadLibrary("vulkan-1.dll");
         if (loader == IntPtr.Zero) { Console.Error.WriteLine("FAIL: cannot load vulkan-1.dll"); return 2; }
@@ -170,8 +170,8 @@ public static class VulkanTriangleProbe
         IntPtr instanceExtStrings = Marshal.AllocHGlobal(instanceExtNames.Length * IntPtr.Size), deviceExtString = Marshal.StringToHGlobalAnsi(deviceExtNames[0]);
         IntPtr surfaceInfoMem = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(SurfaceInfo))), appMem = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(AppInfo))), instanceMem = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(InstanceInfo)));
         IntPtr instance = IntPtr.Zero, surface = IntPtr.Zero, physical = IntPtr.Zero, device = IntPtr.Zero, queue = IntPtr.Zero, swapchain = IntPtr.Zero, pool = IntPtr.Zero, vertexModule=IntPtr.Zero, fragmentModule=IntPtr.Zero, renderPass=IntPtr.Zero, pipeline=IntPtr.Zero, pipelineLayout=IntPtr.Zero;
-        const int frameCount=1;
-        IntPtr[] acquireSemaphores=new IntPtr[frameCount], renderSemaphores=new IntPtr[frameCount];
+        if(frameCount<1)throw new ArgumentOutOfRangeException("frameCount");
+        IntPtr[] acquireSemaphores=new IntPtr[frameCount], renderSemaphores=null;
         IntPtr[] imageViews=null, framebuffers=null;
         GetInstanceProcAddr getInst = null; GetDeviceProcAddr getDev = null;
         try
@@ -260,6 +260,7 @@ public static class VulkanTriangleProbe
                 try
                 {
                     Check(getImages(device,swapchain,ref imageCountOut,images),"vkGetSwapchainImagesKHR(list)");
+                    renderSemaphores=new IntPtr[imageCountOut];
                     imageViews=new IntPtr[imageCountOut];framebuffers=new IntPtr[imageCountOut];
                     for(uint vi=0;vi<imageCountOut;vi++)
                     {
@@ -271,10 +272,12 @@ public static class VulkanTriangleProbe
                     pipeline=CreateGraphicsPipeline(device,getDev,renderPass,selectedWidth,selectedHeight,vertexModule,fragmentModule,out pipelineLayout);
                     for(uint fi=0;fi<imageCountOut;fi++)framebuffers[fi]=CreateFramebufferObject(device,getDev,renderPass,imageViews[fi],selectedWidth,selectedHeight);
                     var poolInfo=new CommandPoolInfo{sType=39,pNext=IntPtr.Zero,flags=0,family=family};IntPtr poolInfoMem=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(CommandPoolInfo)));try{Marshal.StructureToPtr(poolInfo,poolInfoMem,false);Check(Dev<CreateCommandPool>(getDev,device,"vkCreateCommandPool")(device,poolInfoMem,IntPtr.Zero,out pool),"vkCreateCommandPool");}finally{Marshal.FreeHGlobal(poolInfoMem);}
+                    var renderSemInfo=new SemaphoreInfo{sType=9,pNext=IntPtr.Zero,flags=0};IntPtr renderSemMem=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(SemaphoreInfo)));try{Marshal.StructureToPtr(renderSemInfo,renderSemMem,false);for(uint si=0;si<imageCountOut;si++)Check(Dev<CreateSemaphore>(getDev,device,"vkCreateSemaphore")(device,renderSemMem,IntPtr.Zero,out renderSemaphores[si]),"create per-image render semaphore");}finally{Marshal.FreeHGlobal(renderSemMem);}
                     for(int frame=0;frame<frameCount;frame++)
                     {
-                    var semInfo=new SemaphoreInfo{sType=9,pNext=IntPtr.Zero,flags=0};IntPtr semMem=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(SemaphoreInfo)));try{Marshal.StructureToPtr(semInfo,semMem,false);Check(Dev<CreateSemaphore>(getDev,device,"vkCreateSemaphore")(device,semMem,IntPtr.Zero,out acquireSemaphores[frame]),"create acquire semaphore");Check(Dev<CreateSemaphore>(getDev,device,"vkCreateSemaphore")(device,semMem,IntPtr.Zero,out renderSemaphores[frame]),"create render semaphore");}finally{Marshal.FreeHGlobal(semMem);}
+                    var semInfo=new SemaphoreInfo{sType=9,pNext=IntPtr.Zero,flags=0};IntPtr semMem=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(SemaphoreInfo)));try{Marshal.StructureToPtr(semInfo,semMem,false);Check(Dev<CreateSemaphore>(getDev,device,"vkCreateSemaphore")(device,semMem,IntPtr.Zero,out acquireSemaphores[frame]),"create acquire semaphore");}finally{Marshal.FreeHGlobal(semMem);}
                     uint imageIndex;int acquireResult=Dev<AcquireNextImage>(getDev,device,"vkAcquireNextImageKHR")(device,swapchain,5000000000UL,acquireSemaphores[frame],IntPtr.Zero,out imageIndex);if(acquireResult==2)throw new InvalidOperationException("Timed out waiting for a presented swapchain image; the window may need to be visible or the presentation driver may not be returning images.");if(acquireResult!=0&&acquireResult!=1000001003)Check(acquireResult,"vkAcquireNextImageKHR");
+                    Console.WriteLine("Frame "+(frame+1)+" acquired swapchain image "+imageIndex);
                     IntPtr commandBufferMemory=Marshal.AllocHGlobal(IntPtr.Size),commandBuffer;var allocInfo=new CommandAllocInfo{sType=40,pNext=IntPtr.Zero,pool=pool,level=0,count=1};IntPtr allocMem=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(CommandAllocInfo)));try{Marshal.StructureToPtr(allocInfo,allocMem,false);Check(Dev<AllocateCommandBuffers>(getDev,device,"vkAllocateCommandBuffers")(device,allocMem,commandBufferMemory),"vkAllocateCommandBuffers");commandBuffer=Marshal.ReadIntPtr(commandBufferMemory);}finally{Marshal.FreeHGlobal(allocMem);Marshal.FreeHGlobal(commandBufferMemory);}
                     var begin=new CommandBeginInfo{sType=42,pNext=IntPtr.Zero,flags=1,inheritance=IntPtr.Zero};IntPtr beginMem=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(CommandBeginInfo)));try{Marshal.StructureToPtr(begin,beginMem,false);Check(Dev<BeginCommandBuffer>(getDev,device,"vkBeginCommandBuffer")(commandBuffer,beginMem),"vkBeginCommandBuffer");}finally{Marshal.FreeHGlobal(beginMem);}
                     IntPtr clearMem=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(ClearValue))),renderBeginMem=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(RenderPassBeginInfo)));
@@ -292,18 +295,18 @@ public static class VulkanTriangleProbe
                     IntPtr waits=Marshal.AllocHGlobal(IntPtr.Size),signals=Marshal.AllocHGlobal(IntPtr.Size),commands=Marshal.AllocHGlobal(IntPtr.Size),stages=Marshal.AllocHGlobal(4),submitMem=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(SubmitInfo)));
                     try
                     {
-                        Marshal.WriteIntPtr(waits,acquireSemaphores[frame]);Marshal.WriteIntPtr(signals,renderSemaphores[frame]);Marshal.WriteIntPtr(commands,commandBuffer);Marshal.WriteInt32(stages,unchecked((int)0x400));
+                        Marshal.WriteIntPtr(waits,acquireSemaphores[frame]);Marshal.WriteIntPtr(signals,renderSemaphores[imageIndex]);Marshal.WriteIntPtr(commands,commandBuffer);Marshal.WriteInt32(stages,unchecked((int)0x400));
                         var submit=new SubmitInfo{sType=4,pNext=IntPtr.Zero,waitCount=1,waits=waits,waitStages=stages,commandCount=1,commands=commands,signalCount=1,signals=signals};Marshal.StructureToPtr(submit,submitMem,false);Check(Dev<QueueSubmit>(getDev,device,"vkQueueSubmit")(queue,1,submitMem,IntPtr.Zero),"vkQueueSubmit");
                         IntPtr presentWaits=Marshal.AllocHGlobal(IntPtr.Size),swapchains=Marshal.AllocHGlobal(IntPtr.Size),indices=Marshal.AllocHGlobal(4),presentMem=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(PresentInfo)));
-                        try{Marshal.WriteIntPtr(presentWaits,renderSemaphores[frame]);Marshal.WriteIntPtr(swapchains,swapchain);Marshal.WriteInt32(indices,unchecked((int)imageIndex));var present=new PresentInfo{sType=1000001001,pNext=IntPtr.Zero,waitCount=1,waits=presentWaits,swapchainCount=1,swapchains=swapchains,imageIndices=indices,results=IntPtr.Zero};Marshal.StructureToPtr(present,presentMem,false);int pr=Dev<QueuePresent>(getDev,device,"vkQueuePresentKHR")(queue,presentMem);if(pr!=0&&pr!=1000001003)Check(pr,"vkQueuePresentKHR");Check(Dev<QueueWaitIdle>(getDev,device,"vkQueueWaitIdle")(queue),"vkQueueWaitIdle");}
+                        try{Marshal.WriteIntPtr(presentWaits,renderSemaphores[imageIndex]);Marshal.WriteIntPtr(swapchains,swapchain);Marshal.WriteInt32(indices,unchecked((int)imageIndex));var present=new PresentInfo{sType=1000001001,pNext=IntPtr.Zero,waitCount=1,waits=presentWaits,swapchainCount=1,swapchains=swapchains,imageIndices=indices,results=IntPtr.Zero};Marshal.StructureToPtr(present,presentMem,false);int pr=Dev<QueuePresent>(getDev,device,"vkQueuePresentKHR")(queue,presentMem);if(pr!=0&&pr!=1000001003)Check(pr,"vkQueuePresentKHR");Console.WriteLine("Frame "+(frame+1)+" presented; waiting for queue idle");Check(Dev<QueueWaitIdle>(getDev,device,"vkQueueWaitIdle")(queue),"vkQueueWaitIdle");}
                         finally{Marshal.FreeHGlobal(presentMem);Marshal.FreeHGlobal(indices);Marshal.FreeHGlobal(swapchains);Marshal.FreeHGlobal(presentWaits);}
                     }
                     finally{Marshal.FreeHGlobal(submitMem);Marshal.FreeHGlobal(stages);Marshal.FreeHGlobal(commands);Marshal.FreeHGlobal(signals);Marshal.FreeHGlobal(waits);}
                     }
-                    Console.WriteLine("Shader triangle present: PASS | one synthetic frame at "+selectedWidth+"x"+selectedHeight);
+                    Console.WriteLine("Shader triangle present: PASS | "+frameCount+" synthetic frames at "+selectedWidth+"x"+selectedHeight);
                 }
                 finally{Marshal.FreeHGlobal(images);}
-                Console.WriteLine("RESULT: PASS - Vulkan 1.2 swapchain rendered and presented one shader-backed triangle.");
+                Console.WriteLine("RESULT: PASS - Vulkan 1.2 swapchain rendered and presented "+frameCount+" shader-backed triangle frame(s).");
                 return 0;
             }
             finally{Marshal.FreeHGlobal(props);Marshal.FreeHGlobal(devices);}
@@ -321,11 +324,12 @@ public static class VulkanTriangleProbe
                 if(vertexModule!=IntPtr.Zero)try{Dev<DestroyShaderModule>(getDev,device,"vkDestroyShaderModule")(device,vertexModule,IntPtr.Zero);}catch{}
                 if(fragmentModule!=IntPtr.Zero)try{Dev<DestroyShaderModule>(getDev,device,"vkDestroyShaderModule")(device,fragmentModule,IntPtr.Zero);}catch{}
                 if(renderPass!=IntPtr.Zero)try{Dev<DestroyRenderPass>(getDev,device,"vkDestroyRenderPass")(device,renderPass,IntPtr.Zero);}catch{}
-                // Semaphore destruction is deferred to vkDestroyDevice. Some Windows AMD
-                // presentation drivers still consume the wait asynchronously after queue idle.
                 if(pool!=IntPtr.Zero)try{Dev<DestroyCommandPool>(getDev,device,"vkDestroyCommandPool")(device,pool,IntPtr.Zero);}catch{}
-                // Device teardown releases the swapchain after presentation; this avoids
-                // racing the WSI compositor on the target's current AMD driver.
+                // On this AMD/WDDM stack, destroying a just-presented swapchain
+                // can fault in the driver even after vkDeviceWaitIdle. Keep this
+                // short-lived probe isolated until present-completion handling is fixed.
+                if(acquireSemaphores!=null)foreach(IntPtr semaphore in acquireSemaphores)if(semaphore!=IntPtr.Zero)try{Dev<DestroySemaphore>(getDev,device,"vkDestroySemaphore")(device,semaphore,IntPtr.Zero);}catch{}
+                if(renderSemaphores!=null)foreach(IntPtr semaphore in renderSemaphores)if(semaphore!=IntPtr.Zero)try{Dev<DestroySemaphore>(getDev,device,"vkDestroySemaphore")(device,semaphore,IntPtr.Zero);}catch{}
                 try{Dev<DestroyDevice>(getDev,device,"vkDestroyDevice")(device,IntPtr.Zero);}catch{}
             }
             if(instance!=IntPtr.Zero){if(surface!=IntPtr.Zero)try{Inst<DestroySurface>(getInst,instance,"vkDestroySurfaceKHR")(instance,surface,IntPtr.Zero);}catch{} try{Load<DestroyInstance>(loader,"vkDestroyInstance")(instance,IntPtr.Zero);}catch{}}
