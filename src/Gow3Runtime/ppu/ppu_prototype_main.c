@@ -24,6 +24,8 @@ static void put_u64_be(uint8_t *p, uint64_t value)
 #define D_FORM(op, rt, ra, imm) (((uint32_t)(op) << 26) | ((uint32_t)(rt) << 21) | ((uint32_t)(ra) << 16) | (uint16_t)(imm))
 #define X_FORM(rt, ra, rb, xo, rc) ((31u << 26) | ((uint32_t)(rt) << 21) | \
     ((uint32_t)(ra) << 16) | ((uint32_t)(rb) << 11) | ((uint32_t)(xo) << 1) | (rc))
+#define ISEL_FORM(rt, ra, rb, bc) ((31u << 26) | ((uint32_t)(rt) << 21) | \
+    ((uint32_t)(ra) << 16) | ((uint32_t)(rb) << 11) | ((uint32_t)(bc) << 6) | (15u << 1))
 #define ROT_FORM(op, rs, ra, sh, mb, me, rc) (((uint32_t)(op) << 26) | \
     ((uint32_t)(rs) << 21) | ((uint32_t)(ra) << 16) | ((uint32_t)(sh) << 11) | \
     ((uint32_t)(mb) << 6) | ((uint32_t)(me) << 1) | (rc))
@@ -475,6 +477,21 @@ void entry(void)
                 "mulhwu computes the upper half across nontrivial word operands");
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[8] == 0x3fffffff,
                 "mulhw computes the signed upper half for positive operands");
+
+    static uint8_t isel_code[12];
+    EMIT_BE(isel_code, 0, ISEL_FORM(5, 3, 4, 0));
+    EMIT_BE(isel_code, 1, ISEL_FORM(6, 3, 4, 2));
+    EMIT_BE(isel_code, 2, ISEL_FORM(7, 0, 4, 0));
+    ppu_state_init(&state, isel_code, sizeof(isel_code), 0);
+    state.gpr[3] = 0x1234; state.gpr[4] = 0x5678; state.cr = 0x80000000u;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[5] == 0x1234,
+                "isel selects RA when the selected CR bit is set");
+    state.cr = 0;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == 0x5678,
+                "isel selects RB when the selected CR bit is clear");
+    state.cr = 0x80000000u;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[7] == 0,
+                "isel treats RA=r0 as a literal zero source");
 
     static uint8_t carry_ops[32];
     EMIT_BE(carry_ops, 0, X_FORM(5, 3, 4, 10, 0));  /* addc */

@@ -596,6 +596,17 @@ PpuStepResult ppu_step(PpuState *state)
         const uint32_t xo = (insn >> 1) & 0x3ffu;
         const int record = (insn & 1u) != 0;
         uint64_t result;
+        if ((xo & 31u) == 15u) { /* isel uses an A-form with BC in XO's upper bits */
+            const uint32_t condition_bit = (insn >> 6) & 31u;
+            if (record)
+                return PPU_STEP_UNSUPPORTED;
+            result = (state->cr & (1u << (31u - condition_bit))) != 0
+                ? (ra == 0 ? 0 : state->gpr[ra])
+                : state->gpr[rb];
+            state->gpr[rt] = result;
+            state->pc += 4;
+            return PPU_STEP_OK;
+        }
         if (xo == 27u || xo == 539u || xo == 794u) { /* sld / srd / srad */
             const uint64_t shift_field = state->gpr[rb];
             const uint32_t shift = (uint32_t)(shift_field & 0x7fu);
