@@ -275,17 +275,32 @@ void entry(void)
     ok &= check(ppu_elf_load_segments(elf, sizeof(elf), &view, 0x10000,
                                       guest_memory, sizeof(guest_memory) - 1) == PPU_ELF_BOUNDS_ERROR,
                 "ELF segment outside guest memory rejected");
-    put_u32_be(elf + 120, D_FORM(14, 3, 0, 5));
-    put_u32_be(elf + 124, D_FORM(14, 4, 3, 7));
-    ok &= check(ppu_elf_load_segments(elf, sizeof(elf), &view, 0x10000,
-                                      guest_memory, sizeof(guest_memory)) == PPU_ELF_OK,
+    uint8_t program_elf[140];
+    for (size_t i = 0; i < sizeof(elf); ++i) program_elf[i] = elf[i];
+    put_u64_be(program_elf + 96, 20);
+    put_u64_be(program_elf + 104, 24);
+    put_u32_be(program_elf + 120, D_FORM(14, 3, 0, 5));
+    put_u32_be(program_elf + 124, (11u << 26) | (1u << 21) | (3u << 16) | 5u);
+    put_u32_be(program_elf + 128, (16u << 26) | (12u << 21) | (2u << 16) | (2u << 2));
+    put_u32_be(program_elf + 132, D_FORM(14, 4, 0, 1)); /* skipped */
+    put_u32_be(program_elf + 136, D_FORM(14, 4, 0, 7));
+    ok &= check(ppu_elf_parse(program_elf, sizeof(program_elf), &view) == PPU_ELF_OK,
+                "synthetic executable program ELF parsed");
+    uint8_t program_memory[24];
+    ok &= check(ppu_elf_load_segments(program_elf, sizeof(program_elf), &view, 0x10000,
+                                      program_memory, sizeof(program_memory)) == PPU_ELF_OK,
                 "synthetic executable segment loaded for PPU integration");
-    ppu_state_init(&state, guest_memory, sizeof(guest_memory), view.entry);
+    ppu_state_init(&state, program_memory, sizeof(program_memory), view.entry);
     ppu_set_code_base(&state, 0x10000);
-    ppu_set_memory_at(&state, guest_memory, sizeof(guest_memory), 0x10000);
+    ppu_set_memory_at(&state, program_memory, sizeof(program_memory), 0x10000);
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.pc == 0x10004 && state.gpr[3] == 5,
                 "PPU fetches first instruction from ELF virtual entry address");
-    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.pc == 0x10008 && state.gpr[4] == 12,
-                "PPU executes sequential instruction from mapped ELF segment");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.pc == 0x10008 &&
+                ((state.cr >> 29) & 1u) == 1u,
+                "PPU executes compare from mapped ELF code");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.pc == 0x10010 && state.gpr[4] == 0,
+                "PPU executes conditional branch and skips the next instruction");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.pc == 0x10014 && state.gpr[4] == 7,
+                "PPU resumes at branch target in mapped ELF segment");
     ExitProcess(ok ? 0u : 1u);
 }

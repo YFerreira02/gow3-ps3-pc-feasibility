@@ -17,7 +17,7 @@ Aquí “nativo” significa un programa de Windows con interfaz y renderer prop
 ## Implemented so far / Implementado hasta ahora
 
 - Windows Vulkan probes: the Vega 8 exposes Vulkan 1.2; synthetic triangle and offscreen display paths have been exercised. These are not game benchmarks.
-- Asset-free PPU interpreter prototype: D-form immediates, selected X-form `add`/`subf`/`and`/`or`/`xor`, signed/unsigned compares, direct/conditional/indirect branches, and byte/word loads/stores. ELF64 PPC64 fixtures map into virtual memory and execute from their entry point. This is not a game loader or usable emulator.
+- Asset-free PPU interpreter prototype: D-form immediates, selected X-form integer ops, signed/unsigned compares, direct/conditional/indirect branches, and byte/word loads/stores. A synthetic ELF64 PPC64 program is mapped at a virtual address and executes compare/branch flow from its entry point. This is not a game loader or usable emulator.
 - No PS3 executable, ISO, firmware, decryption key, or game asset is in the repository.
 
 ## Next gates / Siguientes etapas

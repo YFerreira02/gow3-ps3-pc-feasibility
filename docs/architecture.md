@@ -11,7 +11,7 @@ La app será un ejecutable propio de Windows y controlará interfaz, entrada, au
 | Component | Responsibility | State / Estado |
 |---|---|---|
 | Windows host | Window, input, audio output, logging, settings, crash handling | Existing synthetic Vulkan probes; no game UI/runtime yet |
-| ELF parser/segment mapper | Validate PPC64 big-endian ELF header, segment bounds and executable entry; copy PT_LOAD bytes into supplied guest memory and zero BSS | Synthetic buffers only; no path-based file loading, SELF, or decryption support; synthetic vertical integration passes |
+| ELF parser/segment mapper | Validate PPC64 big-endian ELF header, segment bounds and executable entry; copy PT_LOAD bytes into supplied guest memory and zero BSS | Synthetic ELF program executes compare/branch flow; no path-based file loading, SELF, or decryption support |
 | PPU core | PowerPC 64-bit register/state model, instruction decoding, exceptions, translation blocks | C reference core executes D-form and selected X-form integer operations, direct/conditional/indirect branches, and byte/word loads/stores; synthetic checks pass |
 | PPU dynarec | Compile verified PPU blocks to x86-64, cache/invalidate, map exceptions | Not started |
 | PS3 services | Threads, virtual memory, filesystem, timers, synchronization, modules used by this title | Not started; requires lawful decrypted executable evidence |

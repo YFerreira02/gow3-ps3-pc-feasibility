@@ -29,7 +29,7 @@ Build and run:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Build-PpuPrototype.ps1
 ```
 
-Recorded local result: the native x64 harness built with Zig 0.17.0, and fifty checks passed: immediate and X-form integer semantics, signed/unsigned comparisons, sign extension, bounds rejection, unsupported-opcode stop behavior, relative/absolute and conditional branches including LR/CTR indirect branches, CR/CTR tests, link state, big-endian word/byte loads and stores, memory bounds/alignment faults, ELF architecture/format/segment/entry validation, PT_LOAD copying and BSS zero-fill, guest-memory bounds validation, and PPU execution from a mapped ELF virtual entry. Output is under ignored `work/`; it is not committed. A prior Zig 0.15.2 distribution was incomplete and was not used for the successful build.
+Recorded local result: the native x64 harness built with Zig 0.17.0, and fifty-two checks passed: immediate and X-form integer semantics, signed/unsigned comparisons, sign extension, bounds rejection, unsupported-opcode stop behavior, relative/absolute and conditional branches including LR/CTR indirect branches, CR/CTR tests, link state, big-endian word/byte loads and stores, memory bounds/alignment faults, ELF architecture/format/segment/entry validation, PT_LOAD copying and BSS zero-fill, guest-memory bounds validation, and a synthetic ELF program executing compare/conditional-branch flow from its mapped virtual entry. Output is under ignored `work/`; it is not committed. A prior Zig 0.15.2 distribution was incomplete and was not used for the successful build.
 
 ## Unknowns / Incertidumbres
 
