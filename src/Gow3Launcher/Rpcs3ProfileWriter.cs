@@ -39,6 +39,14 @@ internal static class Rpcs3ProfileWriter
               Resolution Scale: {resolutionScalePercent}
               Vulkan:
                 Adapter: AMD Radeon(TM) Vega 8 Graphics
+            Performance Overlay:
+              Enabled: true
+              Enable Framerate Graph: true
+              Enable Frametime Graph: true
+              Detail level: Medium
+              Framerate graph detail level: All
+              Frametime graph detail level: All
+              Metrics update interval (ms): 350
             """;
 
         if (File.Exists(profilePath))

@@ -41,6 +41,7 @@ USO
 
 Este programa verifica PARAM.SFO y solo acepta el ID BCES00510 (version europea).
 Escala interna: 25-100% de 1280x720; el perfil anterior se respalda al cambiarlo.
+El perfil activa el overlay de FPS/frame time de RPCS3 para medir.
 No abre ISO, no instala firmware, no configura ajustes/parches y no es un port nativo.
 La compatibilidad y el rendimiento dependen de RPCS3 y del equipo; 50-60 FPS no esta garantizado.
 La configuracion local se guarda en %LOCALAPPDATA%\GOW3PS3PC.

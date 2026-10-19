@@ -56,7 +56,7 @@ The Win32 swapchain path remains unstable on the target AMD driver: FIFO reaches
 
 ## Launcher prototype / Prototipo del launcher
 
-This Windows x64 launcher is a front end for an **external RPCS3 installation**, not a PS3 emulator or a native game port. It accepts an extracted `PS3_GAME` folder, checks for `USRDIR\EBOOT.BIN` and `PARAM.SFO` title ID `BCES00510`, can run the repository's Vulkan 1.2 probe, remembers paths locally, and creates a per-game RPCS3 profile. The profile selects Vulkan on the Vega 8 and offers 25–100% render scale relative to 1280×720. Existing custom profiles are backed up before replacement. It does not support ISO mounting, install firmware, bundle RPCS3, add game patches, or promise better performance. Use a game dump and firmware obtained lawfully for your jurisdiction.
+This Windows x64 launcher is a front end for an **external RPCS3 installation**, not a PS3 emulator or a native game port. It accepts an extracted `PS3_GAME` folder, checks for `USRDIR\EBOOT.BIN` and `PARAM.SFO` title ID `BCES00510`, can run the repository's Vulkan 1.2 probe, remembers paths locally, and creates a per-game RPCS3 profile. The profile selects Vulkan on the Vega 8, offers 25–100% render scale relative to 1280×720, and enables RPCS3's FPS/frame-time overlay for measurement. Existing custom profiles are backed up before replacement. It does not support ISO mounting, install firmware, bundle RPCS3, add game patches, or promise better performance. Use a game dump and firmware obtained lawfully for your jurisdiction.
 
 Build and publish a self-contained Windows 11 x64 app:
 
@@ -68,7 +68,7 @@ Run `work\Gow3LauncherRelease\GOW3 PS3 Launcher.exe`, select your own `rpcs3.exe
 
 The publish script also creates `work\Gow3Launcher-win-x64.zip` for easy local transfer.
 
-Este launcher x64 para Windows es una interfaz para una instalación **externa de RPCS3**, no un emulador PS3 ni un port nativo. Acepta una carpeta `PS3_GAME` extraída, verifica `USRDIR\EBOOT.BIN` y el ID de `PARAM.SFO` `BCES00510`, ejecuta el probe Vulkan 1.2, guarda las rutas y crea un perfil por juego. El perfil selecciona Vulkan en la Vega 8 y ofrece escala interna de 25–100% respecto a 1280×720; respalda el perfil anterior si existe. No monta ISO, instala firmware, incluye RPCS3, agrega parches del juego ni promete más rendimiento. Usa una copia del juego y firmware obtenidos legalmente en tu jurisdicción.
+Este launcher x64 para Windows es una interfaz para una instalación **externa de RPCS3**, no un emulador PS3 ni un port nativo. Acepta una carpeta `PS3_GAME` extraída, verifica `USRDIR\EBOOT.BIN` y el ID de `PARAM.SFO` `BCES00510`, ejecuta el probe Vulkan 1.2, guarda las rutas y crea un perfil por juego. El perfil selecciona Vulkan en la Vega 8, ofrece escala interna de 25–100% respecto a 1280×720 y activa el overlay de FPS/tiempos de cuadro de RPCS3 para medir. Respalda el perfil anterior si existe. No monta ISO, instala firmware, incluye RPCS3, agrega parches del juego ni promete más rendimiento. Usa una copia del juego y firmware obtenidos legalmente en tu jurisdicción.
 
 Compila y publica una app autocontenida para Windows 11 x64:
 
