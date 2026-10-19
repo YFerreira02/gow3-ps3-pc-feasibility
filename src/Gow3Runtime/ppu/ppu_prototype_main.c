@@ -190,13 +190,34 @@ void entry(void)
                 ((state.cr >> 30) & 1u) == 1u,
                 "X-form or record updates CR0");
 
+    uint8_t halfword_code[12];
+    EMIT_BE(halfword_code, 0, D_FORM(40, 7, 0, 0)); /* lhz r7,0(0) */
+    EMIT_BE(halfword_code, 1, D_FORM(42, 8, 0, 0)); /* lha r8,0(0) */
+    EMIT_BE(halfword_code, 2, D_FORM(44, 9, 0, 4)); /* sth r9,4(0) */
+
     uint8_t memory[12] = { 0, 0, 0, 0, 0x12, 0x34, 0x56, 0x78, 0, 0, 0, 0 };
+    memory[0] = 0x80; memory[1] = 0x01;
+    ppu_state_init(&state, halfword_code, sizeof(halfword_code), 0);
+    ppu_set_memory(&state, memory, sizeof(memory));
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[7] == 0x8001,
+                "lhz zero-extends big-endian halfword");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[8] == (uint64_t)-0x7fff,
+                "lha sign-extends big-endian halfword");
+    state.gpr[9] = 0x1abcd;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && memory[4] == 0xab && memory[5] == 0xcd,
+                "sth writes low halfword in big-endian order");
+    EMIT_BE(halfword_code, 0, D_FORM(40, 7, 0, 1));
+    ppu_state_init(&state, halfword_code, 4, 0);
+    ppu_set_memory(&state, memory, sizeof(memory));
+    ok &= check(ppu_step(&state) == PPU_STEP_MEMORY_FAULT && state.pc == 0,
+                "misaligned halfword load faults without advancing PC");
     uint8_t memory_code[24];
     EMIT_BE(memory_code, 0, D_FORM(14, 3, 0, 4));      /* addi r3,0,4 */
     EMIT_BE(memory_code, 1, D_FORM(32, 4, 3, 0));      /* lwz r4,0(r3) */
     EMIT_BE(memory_code, 2, D_FORM(14, 5, 0, 0x55));   /* addi r5,0,0x55 */
     EMIT_BE(memory_code, 3, D_FORM(36, 5, 0, 4));      /* stw r5,4(0) */
     EMIT_BE(memory_code, 4, D_FORM(34, 6, 0, 7));      /* lbz r6,7(0) */
+    memory[4] = 0x12; memory[5] = 0x34; memory[6] = 0x56; memory[7] = 0x78;
     ppu_state_init(&state, memory_code, sizeof(memory_code), 0);
     ppu_set_memory(&state, memory, sizeof(memory));
     ok &= check(ppu_step(&state) == PPU_STEP_OK && ppu_step(&state) == PPU_STEP_OK &&
