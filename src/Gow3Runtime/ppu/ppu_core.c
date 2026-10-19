@@ -40,6 +40,20 @@ static double double_from_bits(uint64_t value)
     return bits.d;
 }
 
+static uint32_t float_bits(float value)
+{
+    union { float f; uint32_t u; } bits;
+    bits.f = value;
+    return bits.u;
+}
+
+static float float_from_bits(uint32_t value)
+{
+    union { float f; uint32_t u; } bits;
+    bits.u = value;
+    return bits.f;
+}
+
 void ppu_state_init(PpuState *state, const uint8_t *code, size_t code_size, uint64_t entry_pc)
 {
     if (!state)
@@ -704,6 +718,38 @@ PpuStepResult ppu_step(PpuState *state)
         state->gpr[ra] = address;
         break;
         }
+    case 48: case 49: case 50: case 51: /* lfs[u], lfd[u] */
+    case 52: case 53: case 54: case 55: { /* stfs[u], stfd[u] */
+        const uint32_t form = opcode & 3u;
+        const int is_single = form == 0u || form == 1u;
+        const int update = (opcode & 1u) != 0;
+        const int is_store = opcode >= 52u;
+        const size_t width = is_single ? 4u : 8u;
+        size_t memory_offset;
+        if (update && ra == 0)
+            return PPU_STEP_UNSUPPORTED;
+        if (!address_valid || (address & (width - 1u)) != 0 ||
+            !memory_range_offset(state, address, width, &memory_offset))
+            return PPU_STEP_MEMORY_FAULT;
+        if (is_store) {
+            const uint64_t value = is_single
+                ? float_bits((float)state->fpr[rt])
+                : double_bits(state->fpr[rt]);
+            for (size_t i = 0; i < width; ++i)
+                state->memory[memory_offset + i] =
+                    (uint8_t)(value >> ((uint32_t)(width - 1u - i) * 8u));
+        } else {
+            uint64_t value = 0;
+            for (size_t i = 0; i < width; ++i)
+                value = (value << 8) | state->memory[memory_offset + i];
+            state->fpr[rt] = is_single
+                ? (double)float_from_bits((uint32_t)value)
+                : double_from_bits(value);
+        }
+        if (update)
+            state->gpr[ra] = address;
+        break;
+    }
     case 58: { /* DS-form ld, ldu, lwa */
         const uint32_t xo = insn & 3u;
         const int64_t displacement = (int16_t)(insn & 0xfffcu);
@@ -732,6 +778,27 @@ PpuStepResult ppu_step(PpuState *state)
         if (xo == 1u)
             state->gpr[ra] = ds_address;
         break;
+    }
+    case 59: { /* selected single-precision floating-point arithmetic */
+        const uint32_t xo5 = (insn >> 1) & 31u;
+        const uint32_t fra = ra;
+        const uint32_t frb = (insn >> 11) & 31u;
+        const uint32_t frc = (insn >> 6) & 31u;
+        if ((insn & 1u) != 0)
+            return PPU_STEP_UNSUPPORTED;
+        const float left = (float)state->fpr[fra];
+        const float right = (float)state->fpr[frb];
+        float value;
+        if (xo5 == 21u) value = left + right; /* fadds */
+        else if (xo5 == 20u) value = left - right; /* fsubs */
+        else if (xo5 == 25u) value = left * (float)state->fpr[frc]; /* fmuls */
+        else if (xo5 == 18u) {
+            if (right == 0.0f) return PPU_STEP_UNSUPPORTED;
+            value = left / right; /* fdivs */
+        } else return PPU_STEP_UNSUPPORTED;
+        state->fpr[rt] = (double)value;
+        state->pc += 4;
+        return PPU_STEP_OK;
     }
     case 62: { /* DS-form std, stdu */
         const uint32_t xo = insn & 3u;

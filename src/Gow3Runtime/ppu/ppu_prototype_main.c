@@ -35,6 +35,8 @@ static void put_u64_be(uint8_t *p, uint64_t value)
     ((uint32_t)(ba) << 16) | ((uint32_t)(bb) << 11) | ((uint32_t)(xo) << 1))
 #define FP_A(rt, ra, rb, frc, xo) ((63u << 26) | ((uint32_t)(rt) << 21) | \
     ((uint32_t)(ra) << 16) | ((uint32_t)(rb) << 11) | ((uint32_t)(frc) << 6) | ((uint32_t)(xo) << 1))
+#define FP_S(rt, ra, rb, frc, xo) ((59u << 26) | ((uint32_t)(rt) << 21) | \
+    ((uint32_t)(ra) << 16) | ((uint32_t)(rb) << 11) | ((uint32_t)(frc) << 6) | ((uint32_t)(xo) << 1))
 #define FP_X(rt, rb, xo) ((63u << 26) | ((uint32_t)(rt) << 21) | \
     ((uint32_t)(rb) << 11) | ((uint32_t)(xo) << 1))
 #define EMIT_BE(dst, i, word) do { \
@@ -363,7 +365,7 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[9] == 0 && state.xer_ca == 1,
                 "addze adds the carry bit to its register operand");
 
-    uint8_t fp_code[32];
+    uint8_t fp_code[48];
     EMIT_BE(fp_code, 0, FP_A(3, 1, 2, 0, 21)); /* fadd */
     EMIT_BE(fp_code, 1, FP_A(4, 1, 2, 0, 20)); /* fsub */
     EMIT_BE(fp_code, 2, FP_A(5, 1, 0, 2, 25)); /* fmul */
@@ -372,6 +374,10 @@ void entry(void)
     EMIT_BE(fp_code, 5, FP_X(8, 9, 264)); /* fabs */
     EMIT_BE(fp_code, 6, FP_X(10, 9, 40)); /* fneg */
     EMIT_BE(fp_code, 7, FP_X(11, 9, 136));/* fnabs */
+    EMIT_BE(fp_code, 8, FP_S(12, 1, 2, 0, 21)); /* fadds */
+    EMIT_BE(fp_code, 9, FP_S(13, 1, 2, 0, 20)); /* fsubs */
+    EMIT_BE(fp_code, 10, FP_S(14, 1, 0, 2, 25)); /* fmuls */
+    EMIT_BE(fp_code, 11, FP_S(15, 2, 1, 0, 18)); /* fdivs */
     ppu_state_init(&state, fp_code, sizeof(fp_code), 0);
     state.fpr[1] = -1.5; state.fpr[2] = 2.25; state.fpr[9] = -3.5;
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[3] == 0.75,
@@ -390,6 +396,14 @@ void entry(void)
                 "fneg toggles the FPR sign bit");
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[11] == -3.5,
                 "fnabs sets the FPR sign bit");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[12] == 0.75,
+                "fadds rounds arithmetic to single precision");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[13] == -3.75,
+                "fsubs rounds arithmetic to single precision");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[14] == -3.375,
+                "fmuls reads its third single-precision operand from FRC");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[15] == -1.5,
+                "fdivs divides single-precision FPR operands");
 
     uint8_t fp_compare[8];
     EMIT_BE(fp_compare, 0, (63u << 26) | (2u << 23) | (1u << 16) | (2u << 11)); /* fcmpu cr2 */
@@ -401,6 +415,34 @@ void entry(void)
     state.fpr[1] = state.fpr[2];
     ok &= check(ppu_step(&state) == PPU_STEP_OK && ((state.cr >> 13) & 1u) == 1u,
                 "fcmpu writes floating-point equality to selected CR field");
+
+    uint8_t fp_memory_code[24];
+    EMIT_BE(fp_memory_code, 0, D_FORM(48, 3, 4, 0));  /* lfs */
+    EMIT_BE(fp_memory_code, 1, D_FORM(50, 4, 4, 8));  /* lfd */
+    EMIT_BE(fp_memory_code, 2, D_FORM(52, 5, 4, 4));  /* stfs */
+    EMIT_BE(fp_memory_code, 3, D_FORM(54, 6, 4, 16)); /* stfd */
+    EMIT_BE(fp_memory_code, 4, D_FORM(49, 7, 8, 0));  /* lfsu */
+    EMIT_BE(fp_memory_code, 5, D_FORM(55, 6, 8, 8));  /* stfdu */
+    uint8_t fp_memory[40] = { 0x3f, 0xc0, 0, 0, 0, 0, 0, 0,
+                              0x40, 0x02, 0, 0, 0, 0, 0, 0,
+                              0, 0, 0, 0, 0, 0, 0, 0,
+                              0xc0, 0x20, 0, 0 };
+    ppu_state_init(&state, fp_memory_code, sizeof(fp_memory_code), 0);
+    ppu_set_memory(&state, fp_memory, sizeof(fp_memory));
+    state.gpr[4] = 0; state.gpr[8] = 24;
+    state.fpr[5] = -3.5; state.fpr[6] = 7.25;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[3] == 1.5,
+                "lfs loads and widens a big-endian single value");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[4] == 2.25,
+                "lfd loads a big-endian double value");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && fp_memory[4] == 0xc0 && fp_memory[7] == 0,
+                "stfs rounds and stores a big-endian single value");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && fp_memory[16] == 0x40 && fp_memory[17] == 0x1d,
+                "stfd stores a big-endian double value");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[7] == -2.5 && state.gpr[8] == 24,
+                "lfsu loads a single value and updates the base");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[8] == 32 && fp_memory[32] == 0x40,
+                "stfdu stores a double value and updates the base");
 
     uint8_t spr_code[16];
     EMIT_BE(spr_code, 0, SPR_FORM(4, 8, 339)); /* mflr r4 */
