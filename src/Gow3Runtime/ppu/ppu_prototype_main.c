@@ -146,6 +146,27 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && ((state.cr >> 26) & 1u) == 1u,
                 "cmpli sets unsigned greater-than in selected CR field");
 
+    uint8_t logical[20];
+    EMIT_BE(logical, 0, D_FORM(25, 3, 4, 2));
+    EMIT_BE(logical, 1, D_FORM(26, 3, 5, 1));
+    EMIT_BE(logical, 2, D_FORM(27, 3, 6, 1));
+    EMIT_BE(logical, 3, D_FORM(28, 3, 7, 1));
+    EMIT_BE(logical, 4, D_FORM(29, 3, 8, 1));
+    ppu_state_init(&state, logical, sizeof(logical), 0);
+    state.gpr[3] = 0x1000000000000001ull;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[4] == 0x1000000000020001ull,
+                "oris applies unsigned immediate to high half of word");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[5] == 0x1000000000000000ull,
+                "xori performs register/immediate XOR");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == 0x1000000000010001ull,
+                "xoris applies immediate XOR to high half of word");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[7] == 1 &&
+                ((state.cr >> 30) & 1u) == 1u,
+                "andi. updates result and CR0 greater-than");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[8] == 0 &&
+                ((state.cr >> 29) & 1u) == 1u,
+                "andis. shifts immediate and sets CR0 EQ for zero result");
+
     uint8_t memory[12] = { 0, 0, 0, 0, 0x12, 0x34, 0x56, 0x78, 0, 0, 0, 0 };
     uint8_t memory_code[24];
     EMIT_BE(memory_code, 0, D_FORM(14, 3, 0, 4));      /* addi r3,0,4 */

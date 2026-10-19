@@ -126,6 +126,23 @@ PpuStepResult ppu_step(PpuState *state)
         state->gpr[ra] = state->gpr[rs] | (uint64_t)imm;
         break;
     }
+    case 25: /* oris */
+        state->gpr[ra] = state->gpr[rt] | ((uint64_t)imm << 16);
+        break;
+    case 26: /* xori */
+        state->gpr[ra] = state->gpr[rt] ^ (uint64_t)imm;
+        break;
+    case 27: /* xoris */
+        state->gpr[ra] = state->gpr[rt] ^ ((uint64_t)imm << 16);
+        break;
+    case 28: /* andi. */
+        state->gpr[ra] = state->gpr[rt] & (uint64_t)imm;
+        set_cr_field(state, 0, state->gpr[ra] == 0 ? 1u : 2u);
+        break;
+    case 29: /* andis. */
+        state->gpr[ra] = state->gpr[rt] & ((uint64_t)imm << 16);
+        set_cr_field(state, 0, state->gpr[ra] == 0 ? 1u : 2u);
+        break;
     case 18: { /* b: unconditional branch */
         const uint32_t li = (insn >> 2) & 0x00ffffffu;
         const int64_t signed_li = (li & 0x00800000u)
