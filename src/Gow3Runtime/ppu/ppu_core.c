@@ -76,6 +76,22 @@ static int memory_range_offset(const PpuState *state, uint64_t address, size_t l
     return 1;
 }
 
+static int add_signed_guest_offset(uint64_t base, int64_t displacement, uint64_t *address)
+{
+    if (displacement >= 0) {
+        const uint64_t delta = (uint64_t)displacement;
+        if (base > UINT64_MAX - delta)
+            return 0;
+        *address = base + delta;
+    } else {
+        const uint64_t delta = (uint64_t)(-(displacement + 1)) + 1u;
+        if (base < delta)
+            return 0;
+        *address = base - delta;
+    }
+    return 1;
+}
+
 static void set_cr_field(PpuState *state, uint32_t field_index, uint32_t relation)
 {
     const uint32_t shift = 28u - (field_index * 4u);
@@ -119,7 +135,8 @@ PpuStepResult ppu_step(PpuState *state)
     const uint16_t imm = (uint16_t)(insn & 0xffffu);
     const int64_t signed_imm = (int16_t)imm;
     const uint64_t base = ra == 0 ? 0 : state->gpr[ra];
-    const uint64_t address = base + (uint64_t)signed_imm;
+    uint64_t address = 0;
+    const int address_valid = add_signed_guest_offset(base, signed_imm, &address);
 
     switch (opcode) {
     case 10: /* cmpli */
@@ -288,7 +305,10 @@ PpuStepResult ppu_step(PpuState *state)
             default: break;
             }
             if (width != 0) {
-                const uint64_t indexed_address = (ra == 0 ? 0 : state->gpr[ra]) + state->gpr[rb];
+                const uint64_t indexed_base = ra == 0 ? 0 : state->gpr[ra];
+                if (indexed_base > UINT64_MAX - state->gpr[rb])
+                    return PPU_STEP_MEMORY_FAULT;
+                const uint64_t indexed_address = indexed_base + state->gpr[rb];
                 size_t memory_offset;
                 if (record || (update && (ra == 0 || (is_load && rt == ra))))
                     return PPU_STEP_UNSUPPORTED;
@@ -395,7 +415,7 @@ PpuStepResult ppu_step(PpuState *state)
     case 32: /* lwz */
         {
         size_t memory_offset;
-        if ((address & 3u) != 0 || !memory_range_offset(state, address, 4, &memory_offset))
+        if (!address_valid || (address & 3u) != 0 || !memory_range_offset(state, address, 4, &memory_offset))
             return PPU_STEP_MEMORY_FAULT;
         state->gpr[rt] = ((uint32_t)state->memory[memory_offset] << 24) |
                          ((uint32_t)state->memory[memory_offset + 1] << 16) |
@@ -407,7 +427,7 @@ PpuStepResult ppu_step(PpuState *state)
         {
         size_t memory_offset;
         if (ra == 0 || rt == ra) return PPU_STEP_UNSUPPORTED;
-        if ((address & 3u) != 0 || !memory_range_offset(state, address, 4, &memory_offset))
+        if (!address_valid || (address & 3u) != 0 || !memory_range_offset(state, address, 4, &memory_offset))
             return PPU_STEP_MEMORY_FAULT;
         state->gpr[rt] = ((uint32_t)state->memory[memory_offset] << 24) |
                          ((uint32_t)state->memory[memory_offset + 1] << 16) |
@@ -419,7 +439,7 @@ PpuStepResult ppu_step(PpuState *state)
     case 34: /* lbz */
         {
         size_t memory_offset;
-        if (!memory_range_offset(state, address, 1, &memory_offset)) return PPU_STEP_MEMORY_FAULT;
+        if (!address_valid || !memory_range_offset(state, address, 1, &memory_offset)) return PPU_STEP_MEMORY_FAULT;
         state->gpr[rt] = state->memory[memory_offset];
         break;
         }
@@ -427,7 +447,7 @@ PpuStepResult ppu_step(PpuState *state)
         {
         size_t memory_offset;
         if (ra == 0 || rt == ra) return PPU_STEP_UNSUPPORTED;
-        if (!memory_range_offset(state, address, 1, &memory_offset)) return PPU_STEP_MEMORY_FAULT;
+        if (!address_valid || !memory_range_offset(state, address, 1, &memory_offset)) return PPU_STEP_MEMORY_FAULT;
         state->gpr[rt] = state->memory[memory_offset];
         state->gpr[ra] = address;
         break;
@@ -435,7 +455,7 @@ PpuStepResult ppu_step(PpuState *state)
     case 36: /* stw */
         {
         size_t memory_offset;
-        if ((address & 3u) != 0 || !memory_range_offset(state, address, 4, &memory_offset))
+        if (!address_valid || (address & 3u) != 0 || !memory_range_offset(state, address, 4, &memory_offset))
             return PPU_STEP_MEMORY_FAULT;
         state->memory[memory_offset] = (uint8_t)(state->gpr[rt] >> 24);
         state->memory[memory_offset + 1] = (uint8_t)(state->gpr[rt] >> 16);
@@ -447,7 +467,7 @@ PpuStepResult ppu_step(PpuState *state)
         {
         size_t memory_offset;
         if (ra == 0) return PPU_STEP_UNSUPPORTED;
-        if ((address & 3u) != 0 || !memory_range_offset(state, address, 4, &memory_offset))
+        if (!address_valid || (address & 3u) != 0 || !memory_range_offset(state, address, 4, &memory_offset))
             return PPU_STEP_MEMORY_FAULT;
         state->memory[memory_offset] = (uint8_t)(state->gpr[rt] >> 24);
         state->memory[memory_offset + 1] = (uint8_t)(state->gpr[rt] >> 16);
@@ -459,7 +479,7 @@ PpuStepResult ppu_step(PpuState *state)
     case 40: /* lhz */
         {
         size_t memory_offset;
-        if ((address & 1u) != 0 || !memory_range_offset(state, address, 2, &memory_offset))
+        if (!address_valid || (address & 1u) != 0 || !memory_range_offset(state, address, 2, &memory_offset))
             return PPU_STEP_MEMORY_FAULT;
         state->gpr[rt] = ((uint16_t)state->memory[memory_offset] << 8) |
                          (uint16_t)state->memory[memory_offset + 1];
@@ -469,7 +489,7 @@ PpuStepResult ppu_step(PpuState *state)
         {
         size_t memory_offset;
         if (ra == 0 || rt == ra) return PPU_STEP_UNSUPPORTED;
-        if ((address & 1u) != 0 || !memory_range_offset(state, address, 2, &memory_offset))
+        if (!address_valid || (address & 1u) != 0 || !memory_range_offset(state, address, 2, &memory_offset))
             return PPU_STEP_MEMORY_FAULT;
         state->gpr[rt] = ((uint16_t)state->memory[memory_offset] << 8) |
                          (uint16_t)state->memory[memory_offset + 1];
@@ -479,7 +499,7 @@ PpuStepResult ppu_step(PpuState *state)
     case 42: /* lha */
         {
         size_t memory_offset;
-        if ((address & 1u) != 0 || !memory_range_offset(state, address, 2, &memory_offset))
+        if (!address_valid || (address & 1u) != 0 || !memory_range_offset(state, address, 2, &memory_offset))
             return PPU_STEP_MEMORY_FAULT;
         const uint16_t value = ((uint16_t)state->memory[memory_offset] << 8) |
                                (uint16_t)state->memory[memory_offset + 1];
@@ -490,7 +510,7 @@ PpuStepResult ppu_step(PpuState *state)
         {
         size_t memory_offset;
         if (ra == 0 || rt == ra) return PPU_STEP_UNSUPPORTED;
-        if ((address & 1u) != 0 || !memory_range_offset(state, address, 2, &memory_offset))
+        if (!address_valid || (address & 1u) != 0 || !memory_range_offset(state, address, 2, &memory_offset))
             return PPU_STEP_MEMORY_FAULT;
         const uint16_t value = ((uint16_t)state->memory[memory_offset] << 8) |
                                (uint16_t)state->memory[memory_offset + 1];
@@ -501,7 +521,7 @@ PpuStepResult ppu_step(PpuState *state)
     case 44: /* sth */
         {
         size_t memory_offset;
-        if ((address & 1u) != 0 || !memory_range_offset(state, address, 2, &memory_offset))
+        if (!address_valid || (address & 1u) != 0 || !memory_range_offset(state, address, 2, &memory_offset))
             return PPU_STEP_MEMORY_FAULT;
         state->memory[memory_offset] = (uint8_t)(state->gpr[rt] >> 8);
         state->memory[memory_offset + 1] = (uint8_t)state->gpr[rt];
@@ -511,7 +531,7 @@ PpuStepResult ppu_step(PpuState *state)
         {
         size_t memory_offset;
         if (ra == 0) return PPU_STEP_UNSUPPORTED;
-        if ((address & 1u) != 0 || !memory_range_offset(state, address, 2, &memory_offset))
+        if (!address_valid || (address & 1u) != 0 || !memory_range_offset(state, address, 2, &memory_offset))
             return PPU_STEP_MEMORY_FAULT;
         state->memory[memory_offset] = (uint8_t)(state->gpr[rt] >> 8);
         state->memory[memory_offset + 1] = (uint8_t)state->gpr[rt];
@@ -522,12 +542,13 @@ PpuStepResult ppu_step(PpuState *state)
         const uint32_t xo = insn & 3u;
         const int64_t displacement = (int16_t)(insn & 0xfffcu);
         const uint64_t ds_base = ra == 0 ? 0 : state->gpr[ra];
-        const uint64_t ds_address = ds_base + (uint64_t)displacement;
+        uint64_t ds_address;
+        const int ds_address_valid = add_signed_guest_offset(ds_base, displacement, &ds_address);
         size_t memory_offset;
         const size_t width = xo == 2u ? 4u : 8u;
         if (xo == 3u || (xo == 1u && ra == 0) || (xo == 1u && rt == ra))
             return PPU_STEP_UNSUPPORTED;
-        if ((ds_address & (width - 1u)) != 0 ||
+        if (!ds_address_valid || (ds_address & (width - 1u)) != 0 ||
             !memory_range_offset(state, ds_address, width, &memory_offset))
             return PPU_STEP_MEMORY_FAULT;
         if (xo == 2u) {
@@ -550,11 +571,12 @@ PpuStepResult ppu_step(PpuState *state)
         const uint32_t xo = insn & 3u;
         const int64_t displacement = (int16_t)(insn & 0xfffcu);
         const uint64_t ds_base = ra == 0 ? 0 : state->gpr[ra];
-        const uint64_t ds_address = ds_base + (uint64_t)displacement;
+        uint64_t ds_address;
+        const int ds_address_valid = add_signed_guest_offset(ds_base, displacement, &ds_address);
         size_t memory_offset;
         if (xo > 1u || (xo == 1u && ra == 0))
             return PPU_STEP_UNSUPPORTED;
-        if ((ds_address & 7u) != 0 || !memory_range_offset(state, ds_address, 8, &memory_offset))
+        if (!ds_address_valid || (ds_address & 7u) != 0 || !memory_range_offset(state, ds_address, 8, &memory_offset))
             return PPU_STEP_MEMORY_FAULT;
         for (size_t i = 0; i < 8; ++i)
             state->memory[memory_offset + i] = (uint8_t)(state->gpr[rt] >> (56u - (uint32_t)(i * 8u)));
@@ -565,7 +587,7 @@ PpuStepResult ppu_step(PpuState *state)
     case 38: /* stb */
         {
         size_t memory_offset;
-        if (!memory_range_offset(state, address, 1, &memory_offset)) return PPU_STEP_MEMORY_FAULT;
+        if (!address_valid || !memory_range_offset(state, address, 1, &memory_offset)) return PPU_STEP_MEMORY_FAULT;
         state->memory[memory_offset] = (uint8_t)state->gpr[rt];
         break;
         }
@@ -573,7 +595,7 @@ PpuStepResult ppu_step(PpuState *state)
         {
         size_t memory_offset;
         if (ra == 0) return PPU_STEP_UNSUPPORTED;
-        if (!memory_range_offset(state, address, 1, &memory_offset)) return PPU_STEP_MEMORY_FAULT;
+        if (!address_valid || !memory_range_offset(state, address, 1, &memory_offset)) return PPU_STEP_MEMORY_FAULT;
         state->memory[memory_offset] = (uint8_t)state->gpr[rt];
         state->gpr[ra] = address;
         break;

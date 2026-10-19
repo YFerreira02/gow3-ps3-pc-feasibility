@@ -436,6 +436,18 @@ void entry(void)
     state.gpr[3] = 1;
     ok &= check(ppu_step(&state) == PPU_STEP_MEMORY_FAULT && state.pc == 0,
                 "misaligned word load faults without advancing PC");
+    EMIT_BE(memory_code, 0, D_FORM(32, 4, 3, 1));
+    ppu_state_init(&state, memory_code, 4, 0);
+    ppu_set_memory(&state, memory, sizeof(memory));
+    state.gpr[3] = UINT64_MAX;
+    ok &= check(ppu_step(&state) == PPU_STEP_MEMORY_FAULT && state.pc == 0,
+                "overflowing displacement address cannot wrap into mapped memory");
+    EMIT_BE(memory_code, 0, X_FORM(4, 3, 5, 23, 0));
+    ppu_state_init(&state, memory_code, 4, 0);
+    ppu_set_memory(&state, memory, sizeof(memory));
+    state.gpr[3] = UINT64_MAX; state.gpr[5] = 1;
+    ok &= check(ppu_step(&state) == PPU_STEP_MEMORY_FAULT && state.pc == 0,
+                "overflowing indexed address cannot wrap into mapped memory");
 
     uint8_t elf[128] = { 0 };
     elf[0] = 0x7f; elf[1] = 'E'; elf[2] = 'L'; elf[3] = 'F';
