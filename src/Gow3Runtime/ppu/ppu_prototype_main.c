@@ -97,6 +97,26 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.pc == 0,
                 "absolute branch target");
 
+    uint8_t conditional[12];
+    EMIT_BE(conditional, 0, (16u << 26) | (12u << 21) | (2u << 16) | (2u << 2));
+    ppu_state_init(&state, conditional, sizeof(conditional), 0);
+    state.cr = 1u << (31u - 2u);
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.pc == 8,
+                "bc tests selected CR bit and takes branch");
+    ppu_state_init(&state, conditional, sizeof(conditional), 0);
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.pc == 4,
+                "bc falls through when selected CR bit does not match");
+
+    EMIT_BE(conditional, 0, (16u << 26) | (16u << 21) | (2u << 2)); /* bdnz +8 */
+    ppu_state_init(&state, conditional, sizeof(conditional), 0);
+    state.ctr = 1;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.pc == 4 && state.ctr == 0,
+                "bc decrements CTR before testing bdnz condition");
+    state.pc = 0;
+    state.ctr = 2;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.pc == 8 && state.ctr == 1,
+                "bdnz branches while decremented CTR is nonzero");
+
     uint8_t memory[12] = { 0, 0, 0, 0, 0x12, 0x34, 0x56, 0x78, 0, 0, 0, 0 };
     uint8_t memory_code[24];
     EMIT_BE(memory_code, 0, D_FORM(14, 3, 0, 4));      /* addi r3,0,4 */

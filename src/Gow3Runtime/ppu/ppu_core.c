@@ -13,6 +13,8 @@ void ppu_state_init(PpuState *state, const uint8_t *code, size_t code_size, uint
     for (size_t i = 0; i < 32; ++i)
         state->gpr[i] = 0;
     state->lr = 0;
+    state->ctr = 0;
+    state->cr = 0;
     state->code = code;
     state->code_size = code_size;
     state->memory = (uint8_t *)code;
@@ -74,6 +76,35 @@ PpuStepResult ppu_step(PpuState *state)
             state->lr = next_pc;
         state->pc = absolute ? (uint64_t)displacement
                              : (uint64_t)((int64_t)state->pc + displacement);
+        return PPU_STEP_OK;
+    }
+    case 16: { /* bc: conditional branch */
+        const uint32_t bo = (insn >> 21) & 31u;
+        const uint32_t bi = (insn >> 16) & 31u;
+        const uint32_t bd = (insn >> 2) & 0x3fffu;
+        const int64_t signed_bd = (bd & 0x2000u)
+            ? (int64_t)bd - 0x4000ll
+            : (int64_t)bd;
+        const int bo0 = (bo & 0x10u) != 0;
+        const int bo1 = (bo & 0x08u) != 0;
+        const int bo2 = (bo & 0x04u) != 0;
+        const int bo3 = (bo & 0x02u) != 0;
+        if (!bo2)
+            --state->ctr;
+        const int ctr_ok = bo2 || (((state->ctr != 0) ? 1 : 0) ^ bo3);
+        const int cr_bit = (int)((state->cr >> (31u - bi)) & 1u);
+        const int cond_ok = bo0 || (cr_bit == bo1);
+        const uint64_t next_pc = state->pc + 4;
+        if ((insn & 1u) != 0)
+            state->lr = next_pc;
+        if (ctr_ok && cond_ok) {
+            const int64_t displacement = signed_bd * 4;
+            state->pc = (insn & 2u) != 0
+                ? (uint64_t)displacement
+                : (uint64_t)((int64_t)state->pc + displacement);
+        } else {
+            state->pc = next_pc;
+        }
         return PPU_STEP_OK;
     }
     case 32: /* lwz */
