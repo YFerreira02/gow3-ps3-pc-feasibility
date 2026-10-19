@@ -558,6 +558,13 @@ void entry(void)
     state.cr = 0x12345678;
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.cr == 0x12545678,
                 "mcrf copies one condition-register field and preserves the others");
+    uint8_t mcrxr_code[4];
+    EMIT_BE(mcrxr_code, 0, (31u << 26) | (5u << 23) | (512u << 1)); /* mcrxr cr5 */
+    ppu_state_init(&state, mcrxr_code, sizeof(mcrxr_code), 0);
+    state.xer_so = 1; state.xer_ov = 0; state.xer_ca = 1; state.xer_bc = 6;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && ((state.cr >> 8) & 0x0fu) == 0x0au &&
+                state.xer_so == 0 && state.xer_ov == 0 && state.xer_ca == 0 && state.xer_bc == 6,
+                "mcrxr transfers XER summary bits to CR and clears them");
 
     uint8_t cr_logic[16];
     EMIT_BE(cr_logic, 0, CR_FORM(3, 1, 2, 257)); /* crand 3,1,2 */

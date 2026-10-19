@@ -433,6 +433,21 @@ PpuStepResult ppu_step(PpuState *state)
         const uint32_t xo = (insn >> 1) & 0x3ffu;
         const int record = (insn & 1u) != 0;
         uint64_t result;
+        if (xo == 512u) { /* mcrxr: transfer XER summary bits to a CR field */
+            const uint32_t bf = (insn >> 23) & 7u;
+            if (record)
+                return PPU_STEP_UNSUPPORTED;
+            const uint32_t shift = 28u - (bf * 4u);
+            const uint32_t field = ((uint32_t)(state->xer_so & 1u) << 3) |
+                ((uint32_t)(state->xer_ov & 1u) << 2) |
+                ((uint32_t)(state->xer_ca & 1u) << 1);
+            state->cr = (state->cr & ~(0x0fu << shift)) | (field << shift);
+            state->xer_so = 0;
+            state->xer_ov = 0;
+            state->xer_ca = 0;
+            state->pc += 4;
+            return PPU_STEP_OK;
+        }
         if (xo == 533u || xo == 661u) { /* lswx / stswx */
             const int is_load = xo == 533u;
             const uint32_t byte_count = state->xer_bc & 0x7fu;
