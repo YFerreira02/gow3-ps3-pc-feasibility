@@ -48,9 +48,37 @@ The Win32 swapchain path remains unstable on the target AMD driver: FIFO reaches
 - [`tools/Build-VulkanNativePresentProbe.ps1`](tools/Build-VulkanNativePresentProbe.ps1) and [`tools/Run-VulkanNativePresentProbe.ps1`](tools/Run-VulkanNativePresentProbe.ps1): build and run the native cross-check with an installed Zig compiler and Vulkan SDK.
 - [`tools/VulkanOffscreenPresentProbe.c`](tools/VulkanOffscreenPresentProbe.c): Vulkan 1.2 offscreen clear/readback path that avoids Win32 swapchains.
 - [`tools/Measure-Process.ps1`](tools/Measure-Process.ps1): records process CPU/memory/thread metrics and available system RAM to an ignored CSV for baseline profiling; it does not report FPS.
+- [`src/Gow3Launcher/`](src/Gow3Launcher/): Windows Forms front end for a user-installed RPCS3, with PS3 title-ID checks and a Vulkan 1.2 probe button.
+- [`tools/Publish-Gow3Launcher.ps1`](tools/Publish-Gow3Launcher.ps1): publishes a self-contained Windows x64 launcher under ignored `work/`.
 - [`tools/Build-VulkanOffscreenProbe.ps1`](tools/Build-VulkanOffscreenProbe.ps1) and [`tools/Run-VulkanOffscreenPresentProbe.ps1`](tools/Run-VulkanOffscreenPresentProbe.ps1): build the offscreen probe and display/scale its output through a Windows window; internal and output dimensions are independent.
 - [`tools/Compile-Shaders.ps1`](tools/Compile-Shaders.ps1): rebuilds the checked-in SPIR-V files from the GLSL sources.
 - `.gitignore`: excludes common disc images, extracted game folders, and game archives from Git.
+
+## Launcher prototype / Prototipo del launcher
+
+This Windows x64 launcher is a front end for an **external RPCS3 installation**, not a PS3 emulator or a native game port. It accepts an extracted `PS3_GAME` folder, checks for `USRDIR\EBOOT.BIN`, can run the repository's Vulkan 1.2 probe, remembers the selected paths locally, and can ask RPCS3 to boot the EBOOT. It does not support ISO mounting, install firmware, bundle RPCS3, configure patches, or promise better performance. Use a game dump and firmware obtained lawfully for your jurisdiction.
+
+Build and publish a self-contained Windows 11 x64 app:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Publish-Gow3Launcher.ps1
+```
+
+Run `work\Gow3LauncherRelease\GOW3 PS3 Launcher.exe`, select your own `rpcs3.exe`, then select the extracted folder containing `PS3_GAME`. `Iniciar el juego directamente` starts RPCS3 with `--no-gui` and the EBOOT path; turn it off to let RPCS3 show its main window. The first launch may build PPU/SPU caches. Vulkan is checked separately with the button in the launcher. The game is not included.
+
+The publish script also creates `work\Gow3Launcher-win-x64.zip` for easy local transfer.
+
+Este launcher x64 para Windows es una interfaz para una instalación **externa de RPCS3**, no un emulador PS3 ni un port nativo. Acepta una carpeta `PS3_GAME` extraída, comprueba `USRDIR\EBOOT.BIN`, puede ejecutar la prueba Vulkan 1.2 del repositorio, guarda las rutas localmente y puede pedir a RPCS3 que arranque el EBOOT. No monta ISO, instala firmware, incluye RPCS3, configura parches ni promete más rendimiento. Usa una copia del juego y firmware obtenidos legalmente en tu jurisdicción.
+
+Compila y publica una app autocontenida para Windows 11 x64:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Publish-Gow3Launcher.ps1
+```
+
+Ejecuta `work\Gow3LauncherRelease\GOW3 PS3 Launcher.exe`, selecciona tu propio `rpcs3.exe` y luego la carpeta extraída que contiene `PS3_GAME`. `Iniciar el juego directamente` ejecuta RPCS3 con `--no-gui` y la ruta al EBOOT; desactívalo para mostrar la ventana principal de RPCS3. El primer inicio puede crear cachés PPU/SPU. El botón del launcher comprueba Vulkan por separado. El juego no está incluido.
+
+El script de publicación también crea `work\Gow3Launcher-win-x64.zip` para transferirlo localmente.
 
 ## License and reuse
 

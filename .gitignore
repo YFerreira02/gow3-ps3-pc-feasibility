@@ -18,6 +18,8 @@ build/
 dist/
 out/
 work/
+**/bin/
+**/obj/
 *.log
 *.dump
 *.bin

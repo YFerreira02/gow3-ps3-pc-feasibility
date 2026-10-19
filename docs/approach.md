@@ -39,18 +39,22 @@ La meta de 50–60 FPS **no es un criterio de aceptación hasta medirla en el ju
 ## Next gates / Siguientes etapas
 
 1. Record the integration boundary and license review before importing any external source.
-2. Build an asset-free Windows launcher/profile mock-up; do not claim it launches the PS3 game.
+2. **Done:** build an asset-free Windows launcher/profile prototype. It locates user-selected RPCS3, checks for an extracted PS3 EBOOT, and offers a separate Vulkan 1.2 device probe; it remains an RPCS3 front end, not a native PS3 runtime.
 3. Define a reproducible RPCS3 baseline measurement plan for a lawful user-provided dump. Keep all game data, firmware, keys, and logs containing proprietary content out of Git.
 4. Investigate a small PPU/SPU/RSX technical experiment only after the baseline reveals a specific bottleneck and a build/toolchain route.
 5. Reassess the standalone-port idea after data. Stop or rescope if the reference PC cannot meet the performance goal under the reused execution path.
 
+The prototype source is `src/Gow3Launcher/`. To build the self-contained Windows x64 package, run `tools/Publish-Gow3Launcher.ps1`; output goes under ignored `work/Gow3LauncherRelease/`. RPCS3 and game files are deliberately not bundled.
+
 For a CPU/memory sample, start the chosen application and workload manually, then run `tools/Measure-Process.ps1 -ProcessName rpcs3 -DurationSeconds 180 -SampleIntervalSeconds 1`. The CSV defaults to the ignored `work/` folder. This recorder measures process CPU time, working set, private memory, thread count, handles, and system-available RAM. It does not measure FPS, GPU utilization, or game correctness; pair it with a frame-time capture and note the scene/settings separately. Use only a game dump obtained lawfully.
 
 1. Registrar los límites de integración y revisar las licencias antes de importar código externo.
-2. Crear un prototipo visual del launcher/perfil de Windows sin recursos del juego; no afirmar que inicia la edición PS3.
+2. **Completado:** crear un prototipo de launcher Windows sin recursos del juego. Encuentra RPCS3 seleccionado por el usuario, comprueba que exista un EBOOT extraído de PS3 y ofrece un probe independiente de Vulkan 1.2; sigue siendo una interfaz para RPCS3, no un runtime PS3 nativo.
 3. Definir mediciones repetibles de RPCS3 con una copia del usuario obtenida legalmente. Mantener fuera de Git los datos del juego, firmware, claves y registros que contengan contenido propietario.
 4. Investigar un experimento pequeño de PPU/SPU/RSX solo cuando la medición inicial muestre un cuello de botella concreto y exista una ruta de compilación.
 5. Revaluar el port independiente con datos. Detener o cambiar el alcance si el PC de referencia no alcanza la meta con la ruta que reutiliza el emulador.
+
+El código está en `src/Gow3Launcher/`. Para crear el paquete autocontenido Windows x64, ejecuta `tools/Publish-Gow3Launcher.ps1`; el resultado queda en `work/Gow3LauncherRelease/`, excluida de Git. RPCS3 y los archivos del juego no se incluyen.
 
 Para recoger una muestra de CPU/memoria, inicia manualmente la aplicación y la escena que se vaya a medir; luego ejecuta `tools/Measure-Process.ps1 -ProcessName rpcs3 -DurationSeconds 180 -SampleIntervalSeconds 1`. El CSV se guarda por defecto en `work/`, excluido de Git. El capturador registra tiempo de CPU del proceso, memoria física y privada, hilos, handles y RAM disponible del sistema. No mide FPS, uso de GPU ni funcionamiento correcto del juego; debe acompañarse de captura de tiempos de cuadro y anotaciones de escena/ajustes. Usa solo una copia del juego obtenida legalmente.
 
