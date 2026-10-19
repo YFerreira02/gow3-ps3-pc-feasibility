@@ -15,6 +15,7 @@ void ppu_state_init(PpuState *state, const uint8_t *code, size_t code_size, uint
     state->lr = 0;
     state->ctr = 0;
     state->cr = 0;
+    state->xer_so = 0;
     state->code = code;
     state->code_size = code_size;
     state->code_base = 0;
@@ -55,6 +56,13 @@ static int memory_range_offset(const PpuState *state, uint64_t address, size_t l
     return 1;
 }
 
+static void set_cr_field(PpuState *state, uint32_t field_index, uint32_t relation)
+{
+    const uint32_t shift = 28u - (field_index * 4u);
+    const uint32_t value = (relation << 1) | (state->xer_so & 1u);
+    state->cr = (state->cr & ~(0x0fu << shift)) | (value << shift);
+}
+
 PpuStepResult ppu_step(PpuState *state)
 {
     if (!state || !state->code || (state->pc & 3u) != 0 || state->pc < state->code_base ||
@@ -73,6 +81,26 @@ PpuStepResult ppu_step(PpuState *state)
     const uint64_t address = base + (uint64_t)signed_imm;
 
     switch (opcode) {
+    case 10: /* cmpli */
+    case 11: { /* cmpi */
+        const uint32_t bf = (insn >> 23) & 7u;
+        const int is_64 = (insn & (1u << 21)) != 0;
+        const uint64_t value = state->gpr[ra];
+        uint32_t relation;
+        if (opcode == 11) {
+            const int64_t left = is_64 ? (int64_t)value : (int64_t)(int32_t)(uint32_t)value;
+            if (left < signed_imm) relation = 4;
+            else if (left > signed_imm) relation = 2;
+            else relation = 1;
+        } else {
+            const uint64_t left = is_64 ? value : (uint32_t)value;
+            if (left < imm) relation = 4;
+            else if (left > imm) relation = 2;
+            else relation = 1;
+        }
+        set_cr_field(state, bf, relation);
+        break;
+    }
     case 14: /* addi */
         state->gpr[rt] = base + (uint64_t)signed_imm;
         break;

@@ -117,6 +117,23 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.pc == 8 && state.ctr == 1,
                 "bdnz branches while decremented CTR is nonzero");
 
+    uint8_t compares[8];
+    EMIT_BE(compares, 0, (11u << 26) | (0u << 23) | (1u << 21) | (3u << 16) | 0xffffu);
+    ppu_state_init(&state, compares, sizeof(compares), 0);
+    state.gpr[3] = UINT64_MAX;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && ((state.cr >> 29) & 1u) == 1u,
+                "cmpi sets CR0 EQ for equal signed 64-bit operands");
+    EMIT_BE(compares, 0, (11u << 26) | (2u << 23) | (1u << 21) | (3u << 16) | 0xffffu);
+    ppu_state_init(&state, compares, sizeof(compares), 0);
+    state.gpr[3] = UINT64_MAX - 1;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && ((state.cr >> 23) & 1u) == 1u,
+                "cmpi writes signed less-than to selected CR field");
+    EMIT_BE(compares, 0, (10u << 26) | (1u << 23) | (1u << 21) | (4u << 16) | 1u);
+    ppu_state_init(&state, compares, sizeof(compares), 0);
+    state.gpr[4] = 0x100000000ull;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && ((state.cr >> 26) & 1u) == 1u,
+                "cmpli sets unsigned greater-than in selected CR field");
+
     uint8_t memory[12] = { 0, 0, 0, 0, 0x12, 0x34, 0x56, 0x78, 0, 0, 0, 0 };
     uint8_t memory_code[24];
     EMIT_BE(memory_code, 0, D_FORM(14, 3, 0, 4));      /* addi r3,0,4 */
