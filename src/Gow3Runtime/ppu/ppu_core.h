@@ -8,7 +8,8 @@ typedef enum PpuStepResult {
     PPU_STEP_OK = 0,
     PPU_STEP_UNSUPPORTED = 1,
     PPU_STEP_BAD_ARGUMENT = 2,
-    PPU_STEP_MEMORY_FAULT = 3
+    PPU_STEP_MEMORY_FAULT = 3,
+    PPU_STEP_SYSCALL = 4
 } PpuStepResult;
 
 typedef struct PpuState {

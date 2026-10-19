@@ -14,7 +14,7 @@ La app será un ejecutable propio de Windows y controlará interfaz, entrada, au
 | ELF parser/segment mapper | Validate PPC64 big-endian ELF header, segment bounds and executable entry; copy PT_LOAD bytes into supplied guest memory and zero BSS | Synthetic ELF program executes compare/branch flow; no path-based file loading, SELF, or decryption support |
 | PPU core | PowerPC 64-bit register/state model, instruction decoding, exceptions, translation blocks | C reference core executes a limited D-form/X-form subset, LR/CTR access, branches, and byte/halfword/word/doubleword loads/stores including tested base updates; synthetic checks pass |
 | PPU dynarec | Compile verified PPU blocks to x86-64, cache/invalidate, map exceptions | Not started |
-| PS3 services | Threads, virtual memory, filesystem, timers, synchronization, modules used by this title | Not started; requires lawful decrypted executable evidence |
+| PS3 services | Threads, virtual memory, filesystem, timers, synchronization, modules used by this title | Not implemented; the PPU core now reports `sc` to a future host-side dispatcher, but there is no syscall service yet |
 | SPU runtime | SPU ISA, local store, DMA, mailboxes, events and scheduling | Not started; likely major CPU/performance risk |
 | RSX frontend | Command processor, GPU state, resources, synchronization, shader semantics | Not started |
 | Vulkan backend | Vulkan 1.2 device, pipeline, render-target and SPIR-V path, resolution scaling | Synthetic host probes exist; no RSX commands or game shaders |

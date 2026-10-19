@@ -138,6 +138,13 @@ PpuStepResult ppu_step(PpuState *state)
     uint64_t address = 0;
     const int address_valid = add_signed_guest_offset(base, signed_imm, &address);
 
+    if (opcode == 17u) { /* sc: hand off to the future PS3 service dispatcher */
+        if (insn != ((17u << 26) | 2u))
+            return PPU_STEP_UNSUPPORTED;
+        state->pc += 4;
+        return PPU_STEP_SYSCALL;
+    }
+
     switch (opcode) {
     case 10: /* cmpli */
     case 11: { /* cmpi */

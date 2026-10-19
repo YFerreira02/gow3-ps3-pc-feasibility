@@ -81,6 +81,13 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_UNSUPPORTED && state.pc == 0,
                 "unsupported instruction stops without advancing");
 
+    uint8_t syscall_code[4];
+    EMIT_BE(syscall_code, 0, (17u << 26) | 2u); /* sc */
+    ppu_state_init(&state, syscall_code, sizeof(syscall_code), 0);
+    state.gpr[11] = 0x123;
+    ok &= check(ppu_step(&state) == PPU_STEP_SYSCALL && state.pc == 4 && state.gpr[11] == 0x123,
+                "sc advances to the return PC and yields to the PS3 service dispatcher");
+
     uint8_t branches[12];
     EMIT_BE(branches, 0, (18u << 26) | (2u << 2));
     EMIT_BE(branches, 1, D_FORM(14, 3, 0, 1));
