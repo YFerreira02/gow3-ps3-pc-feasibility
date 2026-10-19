@@ -47,6 +47,7 @@ The Win32 swapchain path remains unstable on the target AMD driver: FIFO reaches
 - [`tools/VulkanNativePresentProbe.c`](tools/VulkanNativePresentProbe.c): native C cross-check of Vulkan acquire/clear/present and swapchain teardown, used only for diagnosing the target AMD driver.
 - [`tools/Build-VulkanNativePresentProbe.ps1`](tools/Build-VulkanNativePresentProbe.ps1) and [`tools/Run-VulkanNativePresentProbe.ps1`](tools/Run-VulkanNativePresentProbe.ps1): build and run the native cross-check with an installed Zig compiler and Vulkan SDK.
 - [`tools/VulkanOffscreenPresentProbe.c`](tools/VulkanOffscreenPresentProbe.c): Vulkan 1.2 offscreen clear/readback path that avoids Win32 swapchains.
+- [`tools/Measure-Process.ps1`](tools/Measure-Process.ps1): records process CPU/memory/thread metrics and available system RAM to an ignored CSV for baseline profiling; it does not report FPS.
 - [`tools/Build-VulkanOffscreenProbe.ps1`](tools/Build-VulkanOffscreenProbe.ps1) and [`tools/Run-VulkanOffscreenPresentProbe.ps1`](tools/Run-VulkanOffscreenPresentProbe.ps1): build the offscreen probe and display/scale its output through a Windows window; internal and output dimensions are independent.
 - [`tools/Compile-Shaders.ps1`](tools/Compile-Shaders.ps1): rebuilds the checked-in SPIR-V files from the GLSL sources.
 - `.gitignore`: excludes common disc images, extracted game folders, and game archives from Git.
