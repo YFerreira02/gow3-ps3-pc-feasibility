@@ -63,6 +63,13 @@ static void set_cr_field(PpuState *state, uint32_t field_index, uint32_t relatio
     state->cr = (state->cr & ~(0x0fu << shift)) | (value << shift);
 }
 
+static void set_cr0_from_result(PpuState *state, uint64_t result)
+{
+    const int64_t signed_result = (int64_t)result;
+    const uint32_t relation = signed_result < 0 ? 4u : (result == 0 ? 1u : 2u);
+    set_cr_field(state, 0, relation);
+}
+
 static int branch_condition(PpuState *state, uint32_t bo, uint32_t bi, int decrement_ctr)
 {
     const int bo0 = (bo & 0x10u) != 0;
@@ -207,6 +214,31 @@ PpuStepResult ppu_step(PpuState *state)
             return PPU_STEP_OK;
         }
         return PPU_STEP_UNSUPPORTED;
+    }
+    case 31: { /* selected common X-form integer instructions */
+        const uint32_t rb = (insn >> 11) & 31u;
+        const uint32_t xo = (insn >> 1) & 0x1ffu;
+        const int record = (insn & 1u) != 0;
+        uint64_t result;
+        switch (xo) {
+        case 266: /* add */
+            if ((insn & (1u << 10)) != 0) return PPU_STEP_UNSUPPORTED; /* OE */
+            result = state->gpr[ra] + state->gpr[rb];
+            break;
+        case 40: /* subf: RB - RA */
+            if ((insn & (1u << 10)) != 0) return PPU_STEP_UNSUPPORTED; /* OE */
+            result = state->gpr[rb] - state->gpr[ra];
+            break;
+        case 28: result = state->gpr[ra] & state->gpr[rb]; break; /* and */
+        case 316: result = state->gpr[ra] ^ state->gpr[rb]; break; /* xor */
+        case 444: result = state->gpr[ra] | state->gpr[rb]; break; /* or */
+        default: return PPU_STEP_UNSUPPORTED;
+        }
+        state->gpr[rt] = result;
+        if (record)
+            set_cr0_from_result(state, result);
+        state->pc += 4;
+        return PPU_STEP_OK;
     }
     case 32: /* lwz */
         {

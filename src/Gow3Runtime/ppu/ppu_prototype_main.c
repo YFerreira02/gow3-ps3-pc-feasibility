@@ -22,6 +22,8 @@ static void put_u64_be(uint8_t *p, uint64_t value)
 }
 
 #define D_FORM(op, rt, ra, imm) (((uint32_t)(op) << 26) | ((uint32_t)(rt) << 21) | ((uint32_t)(ra) << 16) | (uint16_t)(imm))
+#define X_FORM(rt, ra, rb, xo, rc) ((31u << 26) | ((uint32_t)(rt) << 21) | \
+    ((uint32_t)(ra) << 16) | ((uint32_t)(rb) << 11) | ((uint32_t)(xo) << 1) | (rc))
 #define EMIT_BE(dst, i, word) do { \
     (dst)[(i) * 4] = (uint8_t)((word) >> 24); \
     (dst)[(i) * 4 + 1] = (uint8_t)((word) >> 16); \
@@ -166,6 +168,27 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[8] == 0 &&
                 ((state.cr >> 29) & 1u) == 1u,
                 "andis. shifts immediate and sets CR0 EQ for zero result");
+
+    uint8_t xform[20];
+    EMIT_BE(xform, 0, X_FORM(5, 3, 4, 266, 0)); /* add r5,r3,r4 */
+    EMIT_BE(xform, 1, X_FORM(6, 3, 4, 40, 0));  /* subf r6,r3,r4 */
+    EMIT_BE(xform, 2, X_FORM(7, 3, 4, 28, 0));  /* and r7,r3,r4 */
+    EMIT_BE(xform, 3, X_FORM(8, 3, 4, 316, 0)); /* xor r8,r3,r4 */
+    EMIT_BE(xform, 4, X_FORM(9, 3, 4, 444, 1)); /* or. r9,r3,r4 */
+    ppu_state_init(&state, xform, sizeof(xform), 0);
+    state.gpr[3] = 0x35;
+    state.gpr[4] = 0x17;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[5] == 0x4c,
+                "X-form add");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == (uint64_t)-0x1e,
+                "X-form subtract-from operand order");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[7] == 0x15,
+                "X-form and");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[8] == 0x22,
+                "X-form xor");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[9] == 0x37 &&
+                ((state.cr >> 30) & 1u) == 1u,
+                "X-form or record updates CR0");
 
     uint8_t memory[12] = { 0, 0, 0, 0, 0x12, 0x34, 0x56, 0x78, 0, 0, 0, 0 };
     uint8_t memory_code[24];
