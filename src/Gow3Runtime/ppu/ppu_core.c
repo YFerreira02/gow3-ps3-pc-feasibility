@@ -259,6 +259,19 @@ PpuStepResult ppu_step(PpuState *state)
         const uint32_t xo = (insn >> 1) & 0x3ffu;
         const int record = (insn & 1u) != 0;
         uint64_t result;
+        if (xo == 339u || xo == 467u) { /* mfspr / mtspr, limited to LR and CTR */
+            const uint32_t spr = ((insn >> 16) & 31u) | (((insn >> 11) & 31u) << 5);
+            if (record || (spr != 8u && spr != 9u))
+                return PPU_STEP_UNSUPPORTED;
+            if (xo == 339u)
+                state->gpr[rt] = spr == 8u ? state->lr : state->ctr;
+            else if (spr == 8u)
+                state->lr = state->gpr[rt];
+            else
+                state->ctr = state->gpr[rt];
+            state->pc += 4;
+            return PPU_STEP_OK;
+        }
         switch (xo) {
         case 266: /* add */
             if ((insn & (1u << 10)) != 0) return PPU_STEP_UNSUPPORTED; /* OE */

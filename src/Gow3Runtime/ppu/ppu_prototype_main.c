@@ -27,6 +27,8 @@ static void put_u64_be(uint8_t *p, uint64_t value)
 #define ROT_FORM(op, rs, ra, sh, mb, me, rc) (((uint32_t)(op) << 26) | \
     ((uint32_t)(rs) << 21) | ((uint32_t)(ra) << 16) | ((uint32_t)(sh) << 11) | \
     ((uint32_t)(mb) << 6) | ((uint32_t)(me) << 1) | (rc))
+#define SPR_FORM(rt, spr, xo) ((31u << 26) | ((uint32_t)(rt) << 21) | \
+    (((uint32_t)(spr) & 31u) << 16) | (((uint32_t)(spr) >> 5) << 11) | ((uint32_t)(xo) << 1))
 #define EMIT_BE(dst, i, word) do { \
     (dst)[(i) * 4] = (uint8_t)((word) >> 24); \
     (dst)[(i) * 4 + 1] = (uint8_t)((word) >> 16); \
@@ -240,6 +242,25 @@ void entry(void)
     state.gpr[3] = 0x80000001u;
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[10] == (uint64_t)(int64_t)(int32_t)0x80000001u,
                 "extsw sign-extends the low word");
+
+    uint8_t spr_code[16];
+    EMIT_BE(spr_code, 0, SPR_FORM(4, 8, 339)); /* mflr r4 */
+    EMIT_BE(spr_code, 1, SPR_FORM(5, 9, 339)); /* mfctr r5 */
+    EMIT_BE(spr_code, 2, SPR_FORM(6, 8, 467)); /* mtlr r6 */
+    EMIT_BE(spr_code, 3, SPR_FORM(7, 9, 467)); /* mtctr r7 */
+    ppu_state_init(&state, spr_code, sizeof(spr_code), 0);
+    state.lr = 0x1234;
+    state.ctr = 0x5678;
+    state.gpr[6] = 0x9abc;
+    state.gpr[7] = 0xdef0;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[4] == 0x1234,
+                "mfspr reads LR");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[5] == 0x5678,
+                "mfspr reads CTR");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.lr == 0x9abc,
+                "mtspr writes LR");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.ctr == 0xdef0,
+                "mtspr writes CTR");
 
     uint8_t halfword_code[12];
     EMIT_BE(halfword_code, 0, D_FORM(40, 7, 0, 0)); /* lhz r7,0(0) */
