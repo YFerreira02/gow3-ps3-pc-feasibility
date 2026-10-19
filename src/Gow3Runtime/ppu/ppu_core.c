@@ -235,6 +235,29 @@ PpuStepResult ppu_step(PpuState *state)
         state->gpr[ra] = state->gpr[rt] & ((uint64_t)imm << 16);
         set_cr_field(state, 0, state->gpr[ra] == 0 ? 1u : 2u);
         break;
+    case 46: case 47: { /* lmw / stmw: transfer GPRs RT through r31 */
+        const size_t transfer_size = (size_t)(32u - rt) * 4u;
+        size_t memory_offset;
+        if (!address_valid || (address & 3u) != 0 ||
+            !memory_range_offset(state, address, transfer_size, &memory_offset))
+            return PPU_STEP_MEMORY_FAULT;
+        for (uint32_t reg = rt; reg < 32u; ++reg) {
+            const size_t offset = memory_offset + (size_t)(reg - rt) * 4u;
+            if (opcode == 46u) {
+                state->gpr[reg] = ((uint32_t)state->memory[offset] << 24) |
+                    ((uint32_t)state->memory[offset + 1] << 16) |
+                    ((uint32_t)state->memory[offset + 2] << 8) |
+                    (uint32_t)state->memory[offset + 3];
+            } else {
+                const uint32_t value = (uint32_t)state->gpr[reg];
+                state->memory[offset] = (uint8_t)(value >> 24);
+                state->memory[offset + 1] = (uint8_t)(value >> 16);
+                state->memory[offset + 2] = (uint8_t)(value >> 8);
+                state->memory[offset + 3] = (uint8_t)value;
+            }
+        }
+        break;
+    }
     case 18: { /* b: unconditional branch */
         const uint32_t li = (insn >> 2) & 0x00ffffffu;
         const int64_t signed_li = (li & 0x00800000u)

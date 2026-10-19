@@ -717,6 +717,28 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_MEMORY_FAULT && state.pc == 0,
                 "overflowing indexed address cannot wrap into mapped memory");
 
+    uint8_t multiple_code[12];
+    EMIT_BE(multiple_code, 0, D_FORM(46, 29, 0, 0)); /* lmw r29,0(0) */
+    EMIT_BE(multiple_code, 1, D_FORM(47, 30, 0, 4)); /* stmw r30,4(0) */
+    EMIT_BE(multiple_code, 2, D_FORM(46, 30, 0, 8)); /* lmw r30,8(0), out of bounds */
+    uint8_t multiple_memory[12] = { 0x01, 0x02, 0x03, 0x04,
+                                    0x11, 0x22, 0x33, 0x44,
+                                    0x55, 0x66, 0x77, 0x88 };
+    ppu_state_init(&state, multiple_code, sizeof(multiple_code), 0);
+    ppu_set_memory(&state, multiple_memory, sizeof(multiple_memory));
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[29] == 0x01020304 &&
+                state.gpr[30] == 0x11223344 && state.gpr[31] == 0x55667788,
+                "lmw loads GPR RT through r31 in big-endian order");
+    state.gpr[30] = 0xaabbccdd; state.gpr[31] = 0x12345678;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && multiple_memory[4] == 0xaa &&
+                multiple_memory[7] == 0xdd && multiple_memory[8] == 0x12 &&
+                multiple_memory[11] == 0x78,
+                "stmw stores GPR RT through r31 in big-endian order");
+    state.gpr[30] = 0xdeadbeef;
+    ok &= check(ppu_step(&state) == PPU_STEP_MEMORY_FAULT && state.pc == 8 &&
+                state.gpr[30] == 0xdeadbeef,
+                "out-of-bounds lmw faults before changing any destination register");
+
     uint8_t elf[128] = { 0 };
     elf[0] = 0x7f; elf[1] = 'E'; elf[2] = 'L'; elf[3] = 'F';
     elf[4] = 2; elf[5] = 2; elf[6] = 1;
