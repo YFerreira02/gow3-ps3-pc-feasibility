@@ -12,6 +12,7 @@ void ppu_state_init(PpuState *state, const uint8_t *code, size_t code_size, uint
         return;
     for (size_t i = 0; i < 32; ++i)
         state->gpr[i] = 0;
+    state->lr = 0;
     state->code = code;
     state->code_size = code_size;
     state->pc = entry_pc;
@@ -42,6 +43,21 @@ PpuStepResult ppu_step(PpuState *state)
         const uint32_t rs = rt;
         state->gpr[ra] = state->gpr[rs] | (uint64_t)imm;
         break;
+    }
+    case 18: { /* b: unconditional branch */
+        const uint32_t li = (insn >> 2) & 0x00ffffffu;
+        const int64_t signed_li = (li & 0x00800000u)
+            ? (int64_t)li - 0x01000000ll
+            : (int64_t)li;
+        const uint64_t next_pc = state->pc + 4;
+        const int absolute = (insn & 2u) != 0;
+        const int link = (insn & 1u) != 0;
+        const int64_t displacement = signed_li * 4;
+        if (link)
+            state->lr = next_pc;
+        state->pc = absolute ? (uint64_t)displacement
+                             : (uint64_t)((int64_t)state->pc + displacement);
+        return PPU_STEP_OK;
     }
     default:
         return PPU_STEP_UNSUPPORTED;

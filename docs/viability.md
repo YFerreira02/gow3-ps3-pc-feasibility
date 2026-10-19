@@ -19,7 +19,7 @@ Crear un runtime independiente de Windows para la versión PS3 de *God of War II
 
 ## New standalone work / Nuevo trabajo independiente
 
-`src/Gow3Runtime/ppu/` now contains a small C reference interpreter and a Windows x64 harness. Supported instructions are only `addi`, `addis`, and `ori`; the interpreter rejects invalid fetches and returns unsupported for all other opcodes. The harness uses synthetic big-endian instruction bytes, not a PS3 executable.
+`src/Gow3Runtime/ppu/` now contains a small C reference interpreter and a Windows x64 harness. Supported instructions are `addi`, `addis`, `ori`, and unconditional `b` (relative/absolute addressing and link state); the interpreter rejects invalid fetches and returns unsupported for all other opcodes. The harness uses synthetic big-endian instruction bytes, not a PS3 executable.
 
 Build and run:
 
@@ -27,7 +27,7 @@ Build and run:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Build-PpuPrototype.ps1
 ```
 
-Recorded local result: the native x64 harness built with Zig 0.17.0, and six checks passed: `addi` and zero base, `addis`, `ori`, sign extension, bounds rejection, and unsupported-opcode stop behavior. Output is under ignored `work/`; it is not committed. A prior Zig 0.15.2 distribution was incomplete and was not used for the successful build.
+Recorded local result: the native x64 harness built with Zig 0.17.0, and eleven checks passed: arithmetic/immediate semantics, OR immediate, sign extension, bounds rejection, unsupported-opcode stop behavior, relative branch target/skip, link-register update, negative displacement, and absolute branch target. Output is under ignored `work/`; it is not committed. A prior Zig 0.15.2 distribution was incomplete and was not used for the successful build.
 
 ## Unknowns / Incertidumbres
 

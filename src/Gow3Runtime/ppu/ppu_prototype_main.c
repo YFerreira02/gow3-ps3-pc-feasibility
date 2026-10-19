@@ -55,5 +55,30 @@ void entry(void)
     ppu_state_init(&state, unsupported, sizeof(unsupported), 0);
     ok &= check(ppu_step(&state) == PPU_STEP_UNSUPPORTED && state.pc == 0,
                 "unsupported instruction stops without advancing");
+
+    uint8_t branches[12];
+    EMIT_BE(branches, 0, (18u << 26) | (2u << 2));
+    EMIT_BE(branches, 1, D_FORM(14, 3, 0, 1));
+    EMIT_BE(branches, 2, D_FORM(14, 3, 0, 7));
+    ppu_state_init(&state, branches, sizeof(branches), 0);
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.pc == 8,
+                "relative unconditional branch target");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[3] == 7,
+                "branch skips the sequential instruction");
+
+    EMIT_BE(branches, 0, (18u << 26) | (2u << 2) | 1u);
+    ppu_state_init(&state, branches, sizeof(branches), 0);
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.pc == 8 && state.lr == 4,
+                "branch-and-link records return address in LR");
+
+    EMIT_BE(branches, 2, (18u << 26) | (0x00fffffeu << 2));
+    ppu_state_init(&state, branches, sizeof(branches), 8);
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.pc == 0,
+                "negative relative branch displacement");
+
+    EMIT_BE(branches, 2, (18u << 26) | 2u);
+    ppu_state_init(&state, branches, sizeof(branches), 8);
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.pc == 0,
+                "absolute branch target");
     ExitProcess(ok ? 0u : 1u);
 }
