@@ -68,7 +68,7 @@ static int check(int condition, const char *message)
 
 void entry(void)
 {
-    uint8_t code[16];
+    static uint8_t code[16];
     EMIT_BE(code, 0, D_FORM(14, 3, 0, 5));
     EMIT_BE(code, 1, D_FORM(15, 4, 3, 1));
     EMIT_BE(code, 2, D_FORM(24, 4, 5, 0x20));
@@ -88,12 +88,30 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_BAD_ARGUMENT,
                 "out-of-range instruction fetch rejected");
 
+    static uint8_t immediate_carry[16];
+    EMIT_BE(immediate_carry, 0, D_FORM(12, 5, 3, 1)); /* addic */
+    EMIT_BE(immediate_carry, 1, D_FORM(13, 6, 4, 1)); /* addic. */
+    EMIT_BE(immediate_carry, 2, D_FORM(8, 7, 8, 5));  /* subfic */
+    EMIT_BE(immediate_carry, 3, D_FORM(8, 9, 8, 5));  /* subfic borrow */
+    ppu_state_init(&state, immediate_carry, sizeof(immediate_carry), 0);
+    state.gpr[3] = 5; state.gpr[4] = UINT64_MAX; state.gpr[8] = 3;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[5] == 6 && state.xer_ca == 0,
+                "addic adds a signed immediate without carry");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == 0 && state.xer_ca == 1 &&
+                ((state.cr >> 29) & 1u) == 1u,
+                "addic. updates carry and CR0 on unsigned overflow");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[7] == 2 && state.xer_ca == 1,
+                "subfic computes immediate minus RA and sets carry without borrow");
+    state.gpr[8] = 6;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[9] == UINT64_MAX && state.xer_ca == 0,
+                "subfic clears carry when the subtraction borrows");
+
     const uint8_t unsupported[] = { 0, 0, 0, 0 };
     ppu_state_init(&state, unsupported, sizeof(unsupported), 0);
     ok &= check(ppu_step(&state) == PPU_STEP_UNSUPPORTED && state.pc == 0,
                 "unsupported instruction stops without advancing");
 
-    uint8_t syscall_code[4];
+    static uint8_t syscall_code[4];
     EMIT_BE(syscall_code, 0, (17u << 26) | 2u); /* sc */
     ppu_state_init(&state, syscall_code, sizeof(syscall_code), 0);
     state.gpr[11] = 0x123;
@@ -104,7 +122,7 @@ void entry(void)
     ok &= check(ppu_run(&state, 1, &executed) == PPU_STEP_SYSCALL && executed == 1,
                 "bounded PPU runner stops at the syscall handoff");
 
-    uint8_t loop_code[8];
+    static uint8_t loop_code[8];
     EMIT_BE(loop_code, 0, D_FORM(14, 3, 3, 1));
     EMIT_BE(loop_code, 1, (18u << 26) | (0x00ffffffu << 2)); /* b -4 */
     ppu_state_init(&state, loop_code, sizeof(loop_code), 0);
@@ -112,7 +130,7 @@ void entry(void)
                 executed == 10 && state.gpr[3] == 5 && state.pc == 0,
                 "bounded PPU runner yields after exactly the instruction budget");
 
-    uint8_t branches[12];
+    static uint8_t branches[12];
     EMIT_BE(branches, 0, (18u << 26) | (2u << 2));
     EMIT_BE(branches, 1, D_FORM(14, 3, 0, 1));
     EMIT_BE(branches, 2, D_FORM(14, 3, 0, 7));
@@ -137,7 +155,7 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.pc == 0,
                 "absolute branch target");
 
-    uint8_t conditional[12];
+    static uint8_t conditional[12];
     EMIT_BE(conditional, 0, (16u << 26) | (12u << 21) | (2u << 16) | (2u << 2));
     ppu_state_init(&state, conditional, sizeof(conditional), 0);
     state.cr = 1u << (31u - 2u);
@@ -157,7 +175,7 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.pc == 8 && state.ctr == 1,
                 "bdnz branches while decremented CTR is nonzero");
 
-    uint8_t indirect[4] = { 0, 0, 0, 0 };
+    static uint8_t indirect[4] = { 0, 0, 0, 0 };
     EMIT_BE(indirect, 0, (19u << 26) | (20u << 21) | (16u << 1)); /* blr */
     ppu_state_init(&state, indirect, sizeof(indirect), 0);
     state.lr = 0x108;
@@ -169,7 +187,7 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.pc == 0x208 && state.lr == 4,
                 "bcctrl branches through CTR and records LR");
 
-    uint8_t compares[8];
+    static uint8_t compares[8];
     EMIT_BE(compares, 0, (11u << 26) | (0u << 23) | (1u << 21) | (3u << 16) | 0xffffu);
     ppu_state_init(&state, compares, sizeof(compares), 0);
     state.gpr[3] = UINT64_MAX;
@@ -186,7 +204,7 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && ((state.cr >> 26) & 1u) == 1u,
                 "cmpli sets unsigned greater-than in selected CR field");
 
-    uint8_t reg_compares[8];
+    static uint8_t reg_compares[8];
     EMIT_BE(reg_compares, 0, X_FORM((2u << 2), 3, 4, 0, 0));  /* cmpw cr2,r3,r4 */
     EMIT_BE(reg_compares, 1, X_FORM((3u << 2) | 1u, 5, 6, 32, 0)); /* cmpld cr3,r5,r6 */
     ppu_state_init(&state, reg_compares, sizeof(reg_compares), 0);
@@ -199,7 +217,7 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && ((state.cr >> 18) & 1u) == 1u,
                 "cmpld compares unsigned 64-bit operands");
 
-    uint8_t logical[20];
+    static uint8_t logical[20];
     EMIT_BE(logical, 0, D_FORM(25, 3, 4, 2));
     EMIT_BE(logical, 1, D_FORM(26, 3, 5, 1));
     EMIT_BE(logical, 2, D_FORM(27, 3, 6, 1));
@@ -220,7 +238,7 @@ void entry(void)
                 ((state.cr >> 29) & 1u) == 1u,
                 "andis. shifts immediate and sets CR0 EQ for zero result");
 
-    uint8_t rotate[12];
+    static uint8_t rotate[12];
     EMIT_BE(rotate, 0, ROT_FORM(21, 3, 4, 8, 24, 7, 0)); /* rlwinm wrap mask */
     EMIT_BE(rotate, 1, ROT_FORM(20, 3, 5, 0, 0, 7, 1));  /* rlwimi. */
     EMIT_BE(rotate, 2, ROT_FORM(23, 3, 6, 7, 0, 31, 0)); /* rlwnm */
@@ -236,7 +254,7 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == 0x23456781,
                 "rlwnm takes its shift amount from RB");
 
-    uint8_t double_rotate_code[16];
+    static uint8_t double_rotate_code[16];
     EMIT_BE(double_rotate_code, 0, MD_FORM(3, 4, 0, 32, 0, 1)); /* rldicl. */
     EMIT_BE(double_rotate_code, 1, MD_FORM(3, 5, 4, 15, 1, 0)); /* rldicr */
     EMIT_BE(double_rotate_code, 2, MD_FORM(6, 7, 8, 16, 2, 0)); /* rldic */
@@ -254,7 +272,7 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[9] == 0xffabffffffffffffull,
                 "rldimi inserts a rotated bit field and preserves other destination bits");
 
-    uint8_t xform[20];
+    static uint8_t xform[20];
     EMIT_BE(xform, 0, X_FORM(5, 3, 4, 266, 0)); /* add r5,r3,r4 */
     EMIT_BE(xform, 1, X_FORM(6, 3, 4, 40, 0));  /* subf r6,r3,r4 */
     EMIT_BE(xform, 2, X_FORM(7, 3, 4, 28, 0));  /* and r7,r3,r4 */
@@ -275,7 +293,7 @@ void entry(void)
                 ((state.cr >> 30) & 1u) == 1u,
                 "X-form or record updates CR0");
 
-    uint8_t bit_ops[24];
+    static uint8_t bit_ops[24];
     EMIT_BE(bit_ops, 0, X_FORM(5, 3, 4, 60, 0));  /* andc */
     EMIT_BE(bit_ops, 1, X_FORM(6, 3, 4, 124, 0)); /* nor */
     EMIT_BE(bit_ops, 2, X_FORM(7, 3, 4, 284, 0)); /* eqv */
@@ -297,7 +315,7 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[10] == 0xffffffffffff0f10ull,
                 "negate operates modulo the 64-bit register width");
 
-    uint8_t divide[16];
+    static uint8_t divide[16];
     EMIT_BE(divide, 0, X_FORM(5, 3, 4, 491, 0)); /* divw */
     EMIT_BE(divide, 1, X_FORM(6, 3, 4, 459, 0)); /* divwu */
     EMIT_BE(divide, 2, X_FORM(7, 3, 4, 489, 0)); /* divd */
@@ -320,7 +338,7 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_UNSUPPORTED && state.pc == 0,
                 "division by zero is rejected without advancing the PPU");
 
-    uint8_t word_ops[24];
+    static uint8_t word_ops[24];
     EMIT_BE(word_ops, 0, X_FORM(5, 3, 4, 24, 0));  /* slw */
     EMIT_BE(word_ops, 1, X_FORM(6, 3, 4, 536, 0)); /* srw */
     EMIT_BE(word_ops, 2, X_FORM(7, 3, 0, 26, 0));  /* cntlzw */
@@ -352,7 +370,7 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[10] == (uint64_t)(int64_t)(int32_t)0x80000001u,
                 "extsw sign-extends the low word");
 
-    uint8_t arithmetic_shift_code[16];
+    static uint8_t arithmetic_shift_code[16];
     EMIT_BE(arithmetic_shift_code, 0, X_FORM(5, 6, 2, 824, 0)); /* srawi */
     EMIT_BE(arithmetic_shift_code, 1, X_FORM(5, 7, 4, 792, 0)); /* sraw */
     EMIT_BE(arithmetic_shift_code, 2, X_FORM(5, 8, 2, 824, 1)); /* srawi. */
@@ -374,7 +392,7 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[9] == 8 && state.xer_ca == 0,
                 "zero-distance srawi clears XER CA");
 
-    uint8_t double_shift_code[20];
+    static uint8_t double_shift_code[20];
     EMIT_BE(double_shift_code, 0, X_FORM(5, 6, 4, 27, 0));  /* sld */
     EMIT_BE(double_shift_code, 1, X_FORM(5, 7, 4, 539, 0)); /* srd */
     EMIT_BE(double_shift_code, 2, X_FORM(5, 8, 4, 794, 0)); /* srad */
@@ -396,7 +414,7 @@ void entry(void)
                 state.xer_ca == 1,
                 "srad returns the sign fill and sets CA for shifts of 64 or more");
 
-    uint8_t multiply[12];
+    static uint8_t multiply[12];
     EMIT_BE(multiply, 0, D_FORM(7, 4, 3, -3));        /* mulli */
     EMIT_BE(multiply, 1, X_FORM(5, 3, 4, 233, 0));   /* mulld */
     EMIT_BE(multiply, 2, X_FORM(6, 3, 4, 235, 0));   /* mullw */
@@ -409,7 +427,7 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == (uint32_t)(7u * (uint32_t)-21),
                 "mullw keeps and zero-extends the low 32-bit product");
 
-    uint8_t carry_ops[32];
+    static uint8_t carry_ops[32];
     EMIT_BE(carry_ops, 0, X_FORM(5, 3, 4, 10, 0));  /* addc */
     EMIT_BE(carry_ops, 1, X_FORM(6, 3, 4, 138, 0)); /* adde */
     EMIT_BE(carry_ops, 2, X_FORM(7, 3, 4, 8, 0));   /* subfc */
@@ -443,7 +461,7 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[12] == (uint64_t)-2 && state.xer_ca == 1,
                 "subfme subtracts from minus one with correct carry-out");
 
-    uint8_t fp_code[60];
+    static uint8_t fp_code[60];
     EMIT_BE(fp_code, 0, FP_A(3, 1, 2, 0, 21)); /* fadd */
     EMIT_BE(fp_code, 1, FP_A(4, 1, 2, 0, 20)); /* fsub */
     EMIT_BE(fp_code, 2, FP_A(5, 1, 0, 2, 25)); /* fmul */
@@ -495,7 +513,7 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.fpr[18] == 3.0,
                 "fsel chooses FRC when FRA is zero");
 
-    uint8_t fp_compare[16];
+    static uint8_t fp_compare[16];
     EMIT_BE(fp_compare, 0, (63u << 26) | (2u << 23) | (1u << 16) | (2u << 11)); /* fcmpu cr2 */
     EMIT_BE(fp_compare, 1, (63u << 26) | (4u << 23) | (1u << 16) | (2u << 11)); /* fcmpu cr4 */
     EMIT_BE(fp_compare, 2, (63u << 26) | (5u << 23) | (1u << 16) | (2u << 11)); /* fcmpu cr5 */
@@ -515,14 +533,14 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_UNSUPPORTED && state.pc == 12,
                 "fcmpo with NaN is rejected until floating-point exceptions are modeled");
 
-    uint8_t fp_memory_code[24];
+    static uint8_t fp_memory_code[24];
     EMIT_BE(fp_memory_code, 0, D_FORM(48, 3, 4, 0));  /* lfs */
     EMIT_BE(fp_memory_code, 1, D_FORM(50, 4, 4, 8));  /* lfd */
     EMIT_BE(fp_memory_code, 2, D_FORM(52, 5, 4, 4));  /* stfs */
     EMIT_BE(fp_memory_code, 3, D_FORM(54, 6, 4, 16)); /* stfd */
     EMIT_BE(fp_memory_code, 4, D_FORM(49, 7, 8, 0));  /* lfsu */
     EMIT_BE(fp_memory_code, 5, D_FORM(55, 6, 8, 8));  /* stfdu */
-    uint8_t fp_memory[40] = { 0x3f, 0xc0, 0, 0, 0, 0, 0, 0,
+    static uint8_t fp_memory[40] = { 0x3f, 0xc0, 0, 0, 0, 0, 0, 0,
                               0x40, 0x02, 0, 0, 0, 0, 0, 0,
                               0, 0, 0, 0, 0, 0, 0, 0,
                               0xc0, 0x20, 0, 0 };
@@ -543,7 +561,7 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[8] == 32 && fp_memory[32] == 0x40,
                 "stfdu stores a double value and updates the base");
 
-    uint8_t fp_indexed_code[28];
+    static uint8_t fp_indexed_code[28];
     EMIT_BE(fp_indexed_code, 0, X_FORM(3, 4, 5, 535, 0)); /* lfsx */
     EMIT_BE(fp_indexed_code, 1, X_FORM(6, 4, 5, 567, 0)); /* lfsux */
     EMIT_BE(fp_indexed_code, 2, X_FORM(7, 4, 8, 599, 0)); /* lfdx */
@@ -551,7 +569,7 @@ void entry(void)
     EMIT_BE(fp_indexed_code, 4, X_FORM(10, 4, 8, 695, 0)); /* stfsux */
     EMIT_BE(fp_indexed_code, 5, X_FORM(11, 4, 8, 727, 0)); /* stfdx */
     EMIT_BE(fp_indexed_code, 6, X_FORM(12, 4, 8, 759, 0)); /* stfdux */
-    uint8_t fp_indexed_memory[48] = { 0 };
+    static uint8_t fp_indexed_memory[48] = { 0 };
     fp_indexed_memory[4] = 0x3f; fp_indexed_memory[5] = 0xc0;
     fp_indexed_memory[8] = 0x40; fp_indexed_memory[9] = 0x02;
     ppu_state_init(&state, fp_indexed_code, sizeof(fp_indexed_code), 0);
@@ -586,7 +604,7 @@ void entry(void)
                 fp_indexed_memory[40] == 0xc0 && fp_indexed_memory[47] == 0x00,
                 "stfdux stores double precision and updates its GPR base");
 
-    uint8_t spr_code[24];
+    static uint8_t spr_code[24];
     EMIT_BE(spr_code, 0, SPR_FORM(4, 8, 339)); /* mflr r4 */
     EMIT_BE(spr_code, 1, SPR_FORM(5, 9, 339)); /* mfctr r5 */
     EMIT_BE(spr_code, 2, SPR_FORM(6, 8, 467)); /* mtlr r6 */
@@ -615,7 +633,7 @@ void entry(void)
                 state.xer_ov == 1 && state.xer_ca == 0 && state.xer_bc == 0x2a,
                 "mtspr restores modeled XER fields");
 
-    uint8_t cr_code[12];
+    static uint8_t cr_code[12];
     EMIT_BE(cr_code, 0, X_FORM(4, 0, 0, 19, 0)); /* mfcr r4 */
     EMIT_BE(cr_code, 1, (31u << 26) | (5u << 21) | (0xffu << 12) | (144u << 1)); /* mtcrf all */
     EMIT_BE(cr_code, 2, (31u << 26) | (6u << 21) | (0x20u << 12) | (144u << 1)); /* mtcrf CR2 */
@@ -630,13 +648,13 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.cr == 0x89fbcdef,
                 "mtcrf updates only the selected CR field");
 
-    uint8_t mcrf_code[4];
+    static uint8_t mcrf_code[4];
     EMIT_BE(mcrf_code, 0, (19u << 26) | (2u << 23) | (4u << 18)); /* mcrf cr2,cr4 */
     ppu_state_init(&state, mcrf_code, sizeof(mcrf_code), 0);
     state.cr = 0x12345678;
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.cr == 0x12545678,
                 "mcrf copies one condition-register field and preserves the others");
-    uint8_t mcrxr_code[4];
+    static uint8_t mcrxr_code[4];
     EMIT_BE(mcrxr_code, 0, (31u << 26) | (5u << 23) | (512u << 1)); /* mcrxr cr5 */
     ppu_state_init(&state, mcrxr_code, sizeof(mcrxr_code), 0);
     state.xer_so = 1; state.xer_ov = 0; state.xer_ca = 1; state.xer_bc = 6;
@@ -644,7 +662,7 @@ void entry(void)
                 state.xer_so == 0 && state.xer_ov == 0 && state.xer_ca == 0 && state.xer_bc == 6,
                 "mcrxr transfers XER summary bits to CR and clears them");
 
-    uint8_t cr_logic[16];
+    static uint8_t cr_logic[16];
     EMIT_BE(cr_logic, 0, CR_FORM(3, 1, 2, 257)); /* crand 3,1,2 */
     EMIT_BE(cr_logic, 1, CR_FORM(4, 1, 2, 193)); /* crxor 4,1,2 */
     EMIT_BE(cr_logic, 2, CR_FORM(5, 3, 4, 33));  /* crnor 5,3,4 */
@@ -660,13 +678,13 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && ((state.cr >> (31u - 6u)) & 1u) == 0u,
                 "creqv writes the equivalence result");
 
-    uint8_t ds_code[20];
+    static uint8_t ds_code[20];
     EMIT_BE(ds_code, 0, DS_FORM(58, 5, 3, 0, 0));  /* ld */
     EMIT_BE(ds_code, 1, DS_FORM(58, 6, 3, 8, 2));  /* lwa */
     EMIT_BE(ds_code, 2, DS_FORM(62, 7, 3, 16, 0)); /* std */
     EMIT_BE(ds_code, 3, DS_FORM(58, 8, 3, 8, 1));  /* ldu */
     EMIT_BE(ds_code, 4, DS_FORM(62, 7, 3, 8, 1));  /* stdu */
-    uint8_t ds_memory[32] = { 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+    static uint8_t ds_memory[32] = { 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
                               0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
     ppu_state_init(&state, ds_code, sizeof(ds_code), 0);
     ppu_set_memory(&state, ds_memory, sizeof(ds_memory));
@@ -683,14 +701,14 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[3] == 16 && ds_memory[16] == 0xfe,
                 "stdu writes and updates its base register");
 
-    uint8_t indexed_code[24];
+    static uint8_t indexed_code[24];
     EMIT_BE(indexed_code, 0, X_FORM(5, 3, 4, 23, 0));    /* lwzx */
     EMIT_BE(indexed_code, 1, X_FORM(6, 3, 7, 343, 0));   /* lhax */
     EMIT_BE(indexed_code, 2, X_FORM(8, 3, 9, 21, 0));    /* ldx */
     EMIT_BE(indexed_code, 3, X_FORM(10, 3, 11, 151, 0)); /* stwx */
     EMIT_BE(indexed_code, 4, X_FORM(12, 3, 13, 53, 0));  /* ldux */
     EMIT_BE(indexed_code, 5, X_FORM(14, 3, 15, 181, 0)); /* stdux */
-    uint8_t indexed_memory[40] = { 0, 0, 0, 0, 0x12, 0x34, 0x56, 0x78,
+    static uint8_t indexed_memory[40] = { 0, 0, 0, 0, 0x12, 0x34, 0x56, 0x78,
                                    0x80, 0x01, 0, 0, 0, 0, 0, 0,
                                    0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef };
     ppu_state_init(&state, indexed_code, sizeof(indexed_code), 0);
@@ -711,12 +729,12 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[3] == 32 && indexed_memory[32] == 0xfe,
                 "stdux stores an indexed doubleword and updates its base");
 
-    uint8_t halfword_code[12];
+    static uint8_t halfword_code[12];
     EMIT_BE(halfword_code, 0, D_FORM(40, 7, 0, 0)); /* lhz r7,0(0) */
     EMIT_BE(halfword_code, 1, D_FORM(42, 8, 0, 0)); /* lha r8,0(0) */
     EMIT_BE(halfword_code, 2, D_FORM(44, 9, 0, 4)); /* sth r9,4(0) */
 
-    uint8_t memory[12] = { 0, 0, 0, 0, 0x12, 0x34, 0x56, 0x78, 0, 0, 0, 0 };
+    static uint8_t memory[12] = { 0, 0, 0, 0, 0x12, 0x34, 0x56, 0x78, 0, 0, 0, 0 };
     memory[0] = 0x80; memory[1] = 0x01;
     ppu_state_init(&state, halfword_code, sizeof(halfword_code), 0);
     ppu_set_memory(&state, memory, sizeof(memory));
@@ -733,7 +751,7 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_MEMORY_FAULT && state.pc == 0,
                 "misaligned halfword load faults without advancing PC");
 
-    uint8_t update_code[28];
+    static uint8_t update_code[28];
     EMIT_BE(update_code, 0, D_FORM(33, 7, 3, 0));  /* lwzu r7,0(r3) */
     EMIT_BE(update_code, 1, D_FORM(37, 5, 3, 4));  /* stwu r5,4(r3) */
     EMIT_BE(update_code, 2, D_FORM(35, 8, 3, -4)); /* lbzu r8,-4(r3) */
@@ -769,7 +787,7 @@ void entry(void)
     ppu_set_memory(&state, memory, sizeof(memory));
     ok &= check(ppu_step(&state) == PPU_STEP_UNSUPPORTED && state.pc == 0,
                 "lwzu with RT equal to RA is rejected");
-    uint8_t memory_code[24];
+    static uint8_t memory_code[24];
     EMIT_BE(memory_code, 0, D_FORM(14, 3, 0, 4));      /* addi r3,0,4 */
     EMIT_BE(memory_code, 1, D_FORM(32, 4, 3, 0));      /* lwz r4,0(r3) */
     EMIT_BE(memory_code, 2, D_FORM(14, 5, 0, 0x55));   /* addi r5,0,0x55 */
@@ -819,11 +837,11 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_MEMORY_FAULT && state.pc == 0,
                 "overflowing indexed address cannot wrap into mapped memory");
 
-    uint8_t multiple_code[12];
+    static uint8_t multiple_code[12];
     EMIT_BE(multiple_code, 0, D_FORM(46, 29, 0, 0)); /* lmw r29,0(0) */
     EMIT_BE(multiple_code, 1, D_FORM(47, 30, 0, 4)); /* stmw r30,4(0) */
     EMIT_BE(multiple_code, 2, D_FORM(46, 30, 0, 8)); /* lmw r30,8(0), out of bounds */
-    uint8_t multiple_memory[12] = { 0x01, 0x02, 0x03, 0x04,
+    static uint8_t multiple_memory[12] = { 0x01, 0x02, 0x03, 0x04,
                                     0x11, 0x22, 0x33, 0x44,
                                     0x55, 0x66, 0x77, 0x88 };
     ppu_state_init(&state, multiple_code, sizeof(multiple_code), 0);
@@ -841,11 +859,11 @@ void entry(void)
                 state.gpr[30] == 0xdeadbeef,
                 "out-of-bounds lmw faults before changing any destination register");
 
-    uint8_t string_code[12];
+    static uint8_t string_code[12];
     EMIT_BE(string_code, 0, X_FORM(5, 0, 4, 533, 0)); /* lswx r5,0,r4 */
     EMIT_BE(string_code, 1, X_FORM(7, 0, 4, 661, 0)); /* stswx r7,0,r4 */
     EMIT_BE(string_code, 2, X_FORM(9, 0, 4, 533, 0)); /* zero-count lswx */
-    uint8_t string_memory[20] = { 0, 0, 0, 0, 0x11, 0x22, 0x33, 0x44,
+    static uint8_t string_memory[20] = { 0, 0, 0, 0, 0x11, 0x22, 0x33, 0x44,
                                   0x55, 0x66, 0x77, 0x88 };
     ppu_state_init(&state, string_code, sizeof(string_code), 0);
     ppu_set_memory(&state, string_memory, sizeof(string_memory));
@@ -861,7 +879,7 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[9] == 0xabcdef01,
                 "zero-byte lswx leaves its starting GPR unmodified");
 
-    uint8_t elf[128] = { 0 };
+    static uint8_t elf[128] = { 0 };
     elf[0] = 0x7f; elf[1] = 'E'; elf[2] = 'L'; elf[3] = 'F';
     elf[4] = 2; elf[5] = 2; elf[6] = 1;
     put_u16_be(elf + 16, 2); put_u16_be(elf + 18, 21);
@@ -898,7 +916,7 @@ void entry(void)
     elf[124] = 0xca; elf[125] = 0xfe; elf[126] = 0xba; elf[127] = 0xbe;
     ok &= check(ppu_elf_parse(elf, sizeof(elf), &view) == PPU_ELF_OK,
                 "ELF fixture reparsed before segment loading");
-    uint8_t guest_memory[12];
+    static uint8_t guest_memory[12];
     for (size_t i = 0; i < sizeof(guest_memory); ++i) guest_memory[i] = 0xcc;
     ok &= check(ppu_elf_load_segments(elf, sizeof(elf), &view, 0x10000,
                                       guest_memory, sizeof(guest_memory)) == PPU_ELF_OK &&
@@ -914,7 +932,7 @@ void entry(void)
     view.segments[1].virtual_address = 0x10010;
     view.segments[1].file_size = view.segments[0].file_size;
     view.segments[1].memory_size = view.segments[0].memory_size;
-    uint8_t unchanged_memory[12];
+    static uint8_t unchanged_memory[12];
     for (size_t i = 0; i < sizeof(unchanged_memory); ++i) unchanged_memory[i] = 0x5a;
     ok &= check(ppu_elf_load_segments(elf, sizeof(elf), &view, 0x10000,
                                       unchanged_memory, sizeof(unchanged_memory)) == PPU_ELF_BOUNDS_ERROR,
@@ -925,7 +943,7 @@ void entry(void)
     ok &= check(memory_unchanged,
                 "invalid ELF segment leaves guest memory completely unchanged");
     view.segment_count = 1;
-    uint8_t program_elf[140];
+    static uint8_t program_elf[140];
     for (size_t i = 0; i < sizeof(elf); ++i) program_elf[i] = elf[i];
     put_u64_be(program_elf + 96, 20);
     put_u64_be(program_elf + 104, 24);
@@ -936,7 +954,7 @@ void entry(void)
     put_u32_be(program_elf + 136, D_FORM(14, 4, 0, 7));
     ok &= check(ppu_elf_parse(program_elf, sizeof(program_elf), &view) == PPU_ELF_OK,
                 "synthetic executable program ELF parsed");
-    uint8_t program_memory[24];
+    static uint8_t program_memory[24];
     ok &= check(ppu_elf_load_segments(program_elf, sizeof(program_elf), &view, 0x10000,
                                       program_memory, sizeof(program_memory)) == PPU_ELF_OK,
                 "synthetic executable segment loaded for PPU integration");

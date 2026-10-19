@@ -229,6 +229,22 @@ PpuStepResult ppu_step(PpuState *state)
     case 7: /* mulli: modulo-64-bit product by signed immediate */
         state->gpr[rt] = state->gpr[ra] * (uint64_t)signed_imm;
         break;
+    case 8: { /* subfic: signed immediate minus RA, carry means no borrow */
+        const uint64_t minuend = (uint64_t)signed_imm;
+        const uint64_t subtrahend = state->gpr[ra];
+        state->gpr[rt] = minuend - subtrahend;
+        state->xer_ca = (uint8_t)(minuend >= subtrahend);
+        break;
+    }
+    case 12: case 13: { /* addic / addic. */
+        const uint64_t source = state->gpr[ra];
+        const uint64_t addend = (uint64_t)signed_imm;
+        state->gpr[rt] = source + addend;
+        state->xer_ca = (uint8_t)(state->gpr[rt] < source);
+        if (opcode == 13u)
+            set_cr0_from_result(state, state->gpr[rt]);
+        break;
+    }
     case 14: /* addi */
         state->gpr[rt] = base + (uint64_t)signed_imm;
         break;
