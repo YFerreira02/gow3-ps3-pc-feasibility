@@ -441,6 +441,50 @@ PpuStepResult ppu_step(PpuState *state)
         state->gpr[ra] = address;
         break;
         }
+    case 58: { /* DS-form ld, ldu, lwa */
+        const uint32_t xo = insn & 3u;
+        const int64_t displacement = (int16_t)(insn & 0xfffcu);
+        const uint64_t ds_base = ra == 0 ? 0 : state->gpr[ra];
+        const uint64_t ds_address = ds_base + (uint64_t)displacement;
+        size_t memory_offset;
+        const size_t width = xo == 2u ? 4u : 8u;
+        if (xo == 3u || (xo == 1u && ra == 0) || (xo == 1u && rt == ra))
+            return PPU_STEP_UNSUPPORTED;
+        if ((ds_address & (width - 1u)) != 0 ||
+            !memory_range_offset(state, ds_address, width, &memory_offset))
+            return PPU_STEP_MEMORY_FAULT;
+        if (xo == 2u) {
+            const uint32_t value = ((uint32_t)state->memory[memory_offset] << 24) |
+                ((uint32_t)state->memory[memory_offset + 1] << 16) |
+                ((uint32_t)state->memory[memory_offset + 2] << 8) |
+                (uint32_t)state->memory[memory_offset + 3];
+            state->gpr[rt] = (uint64_t)(int64_t)(int32_t)value;
+        } else {
+            uint64_t value = 0;
+            for (size_t i = 0; i < 8; ++i)
+                value = (value << 8) | state->memory[memory_offset + i];
+            state->gpr[rt] = value;
+        }
+        if (xo == 1u)
+            state->gpr[ra] = ds_address;
+        break;
+    }
+    case 62: { /* DS-form std, stdu */
+        const uint32_t xo = insn & 3u;
+        const int64_t displacement = (int16_t)(insn & 0xfffcu);
+        const uint64_t ds_base = ra == 0 ? 0 : state->gpr[ra];
+        const uint64_t ds_address = ds_base + (uint64_t)displacement;
+        size_t memory_offset;
+        if (xo > 1u || (xo == 1u && ra == 0))
+            return PPU_STEP_UNSUPPORTED;
+        if ((ds_address & 7u) != 0 || !memory_range_offset(state, ds_address, 8, &memory_offset))
+            return PPU_STEP_MEMORY_FAULT;
+        for (size_t i = 0; i < 8; ++i)
+            state->memory[memory_offset + i] = (uint8_t)(state->gpr[rt] >> (56u - (uint32_t)(i * 8u)));
+        if (xo == 1u)
+            state->gpr[ra] = ds_address;
+        break;
+    }
     case 38: /* stb */
         {
         size_t memory_offset;

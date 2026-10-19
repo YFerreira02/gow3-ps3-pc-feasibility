@@ -29,6 +29,8 @@ static void put_u64_be(uint8_t *p, uint64_t value)
     ((uint32_t)(mb) << 6) | ((uint32_t)(me) << 1) | (rc))
 #define SPR_FORM(rt, spr, xo) ((31u << 26) | ((uint32_t)(rt) << 21) | \
     (((uint32_t)(spr) & 31u) << 16) | (((uint32_t)(spr) >> 5) << 11) | ((uint32_t)(xo) << 1))
+#define DS_FORM(op, rt, ra, disp, xo) (((uint32_t)(op) << 26) | ((uint32_t)(rt) << 21) | \
+    ((uint32_t)(ra) << 16) | ((uint16_t)(disp) & 0xfffcu) | (uint32_t)(xo))
 #define EMIT_BE(dst, i, word) do { \
     (dst)[(i) * 4] = (uint8_t)((word) >> 24); \
     (dst)[(i) * 4 + 1] = (uint8_t)((word) >> 16); \
@@ -261,6 +263,29 @@ void entry(void)
                 "mtspr writes LR");
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.ctr == 0xdef0,
                 "mtspr writes CTR");
+
+    uint8_t ds_code[20];
+    EMIT_BE(ds_code, 0, DS_FORM(58, 5, 3, 0, 0));  /* ld */
+    EMIT_BE(ds_code, 1, DS_FORM(58, 6, 3, 8, 2));  /* lwa */
+    EMIT_BE(ds_code, 2, DS_FORM(62, 7, 3, 16, 0)); /* std */
+    EMIT_BE(ds_code, 3, DS_FORM(58, 8, 3, 8, 1));  /* ldu */
+    EMIT_BE(ds_code, 4, DS_FORM(62, 7, 3, 8, 1));  /* stdu */
+    uint8_t ds_memory[32] = { 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+                              0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+    ppu_state_init(&state, ds_code, sizeof(ds_code), 0);
+    ppu_set_memory(&state, ds_memory, sizeof(ds_memory));
+    state.gpr[3] = 0;
+    state.gpr[7] = 0xfedcba9876543210ull;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[5] == 0x0123456789abcdefull,
+                "ld reads a big-endian 64-bit value");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[6] == UINT64_MAX,
+                "lwa sign-extends a big-endian word");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && ds_memory[16] == 0xfe && ds_memory[23] == 0x10,
+                "std writes a big-endian 64-bit value");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[8] == UINT64_MAX && state.gpr[3] == 8,
+                "ldu reads and updates its base register");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[3] == 16 && ds_memory[16] == 0xfe,
+                "stdu writes and updates its base register");
 
     uint8_t halfword_code[12];
     EMIT_BE(halfword_code, 0, D_FORM(40, 7, 0, 0)); /* lhz r7,0(0) */
