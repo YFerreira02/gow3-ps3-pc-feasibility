@@ -105,6 +105,7 @@ PpuSelfResult ppu_self_inspect_image(const uint8_t *bytes, size_t size,
         out->program_type = read_u32_be(program_header);
         out->program_flags = read_u32_be(program_header + 4);
         out->virtual_address = read_u64_be(program_header + 16);
+        out->file_size = read_u64_be(program_header + 32);
         out->memory_size = read_u64_be(program_header + 40);
         out->offset = read_u64_be(segment);
         out->size = read_u64_be(segment + 8);
@@ -117,4 +118,73 @@ PpuSelfResult ppu_self_inspect_image(const uint8_t *bytes, size_t size,
             return PPU_SELF_BAD_SEGMENT_METADATA;
     }
     return PPU_SELF_OK;
+}
+
+static void copy_bytes(uint8_t *to, const uint8_t *from, size_t size)
+{
+    for (size_t i = 0; i < size; ++i)
+        to[i] = from[i];
+}
+
+static void clear_bytes(volatile uint8_t *to, size_t size)
+{
+    for (size_t i = 0; i < size; ++i)
+        to[i] = 0;
+}
+
+PpuSelfLoadResult ppu_self_load_plain_segments(const uint8_t *bytes, size_t size,
+                                               const PpuSelfImageInfo *info,
+                                               uint64_t guest_base, uint8_t *guest_memory,
+                                               size_t guest_size)
+{
+    if (!bytes || !info || !guest_memory || guest_size == 0)
+        return PPU_SELF_LOAD_BAD_ARGUMENT;
+    if (info->program_header_count == 0 || info->program_header_count > PPU_SELF_MAX_SEGMENTS ||
+        guest_base > UINT64_MAX - (uint64_t)guest_size)
+        return PPU_SELF_LOAD_BAD_LAYOUT;
+    const uint64_t guest_end = guest_base + (uint64_t)guest_size;
+    uint32_t executable_entries = 0;
+
+    /* Validate every load before changing guest memory. */
+    for (uint16_t i = 0; i < info->program_header_count; ++i) {
+        const PpuSelfSegmentInfo *segment = &info->segments[i];
+        if (segment->program_type != 1u)
+            continue;
+        if (segment->file_size > segment->memory_size || segment->size != segment->file_size ||
+            segment->virtual_address > UINT64_MAX - segment->memory_size ||
+            segment->virtual_address < guest_base ||
+            segment->virtual_address + segment->memory_size > guest_end ||
+            segment->offset > (uint64_t)size || segment->size > (uint64_t)size - segment->offset)
+            return PPU_SELF_LOAD_BOUNDS_ERROR;
+        if (segment->size != 0 && segment->encryption != 0)
+            return PPU_SELF_LOAD_ENCRYPTED_SEGMENT;
+        if (segment->size != 0 && segment->compression != 1u)
+            return PPU_SELF_LOAD_UNSUPPORTED_COMPRESSION;
+        if ((segment->program_flags & 1u) != 0 && info->elf_entry >= segment->virtual_address &&
+            info->elf_entry < segment->virtual_address + segment->memory_size)
+            executable_entries = 1;
+        for (uint16_t j = 0; j < i; ++j) {
+            const PpuSelfSegmentInfo *other = &info->segments[j];
+            if (other->program_type != 1u || segment->memory_size == 0 || other->memory_size == 0)
+                continue;
+            const uint64_t seg_end = segment->virtual_address + segment->memory_size;
+            const uint64_t other_end = other->virtual_address + other->memory_size;
+            if (segment->virtual_address < other_end && other->virtual_address < seg_end)
+                return PPU_SELF_LOAD_BAD_LAYOUT;
+        }
+    }
+    if (!executable_entries)
+        return PPU_SELF_LOAD_ENTRY_NOT_EXECUTABLE;
+
+    for (uint16_t i = 0; i < info->program_header_count; ++i) {
+        const PpuSelfSegmentInfo *segment = &info->segments[i];
+        if (segment->program_type != 1u)
+            continue;
+        const size_t destination = (size_t)(segment->virtual_address - guest_base);
+        copy_bytes(guest_memory + destination, bytes + (size_t)segment->offset,
+                   (size_t)segment->file_size);
+        clear_bytes(guest_memory + destination + (size_t)segment->file_size,
+                    (size_t)(segment->memory_size - segment->file_size));
+    }
+    return PPU_SELF_LOAD_OK;
 }

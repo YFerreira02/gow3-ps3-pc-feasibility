@@ -30,6 +30,7 @@ typedef struct PpuSelfSegmentInfo {
     uint32_t program_type;
     uint32_t program_flags;
     uint64_t virtual_address;
+    uint64_t file_size;
     uint64_t memory_size;
     uint64_t offset;
     uint64_t size;
@@ -46,11 +47,27 @@ typedef struct PpuSelfImageInfo {
     PpuSelfSegmentInfo segments[PPU_SELF_MAX_SEGMENTS];
 } PpuSelfImageInfo;
 
+typedef enum PpuSelfLoadResult {
+    PPU_SELF_LOAD_OK = 0,
+    PPU_SELF_LOAD_BAD_ARGUMENT,
+    PPU_SELF_LOAD_BAD_LAYOUT,
+    PPU_SELF_LOAD_ENCRYPTED_SEGMENT,
+    PPU_SELF_LOAD_UNSUPPORTED_COMPRESSION,
+    PPU_SELF_LOAD_BOUNDS_ERROR,
+    PPU_SELF_LOAD_ENTRY_NOT_EXECUTABLE
+} PpuSelfLoadResult;
+
 /* Parses only the fixed, big-endian 32-byte SELF header. Does not decrypt. */
 PpuSelfResult ppu_self_parse_header(const uint8_t *bytes, size_t size, PpuSelfView *view);
 
 /* Reads bounded SELF/ELF metadata tables only; segment payloads remain untouched. */
 PpuSelfResult ppu_self_inspect_image(const uint8_t *bytes, size_t size,
                                      PpuSelfImageInfo *info);
+
+/* Loads only unencrypted, uncompressed PT_LOAD data; refuses protected segments. */
+PpuSelfLoadResult ppu_self_load_plain_segments(const uint8_t *bytes, size_t size,
+                                               const PpuSelfImageInfo *info,
+                                               uint64_t guest_base, uint8_t *guest_memory,
+                                               size_t guest_size);
 
 #endif

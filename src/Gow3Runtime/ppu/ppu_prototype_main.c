@@ -1241,5 +1241,32 @@ void entry(void)
     put_u64_be(self_image + 24, 0xffffffffffffffffull);
     ok &= check(ppu_self_inspect_image(self_image, sizeof(self_image), &self_info) == PPU_SELF_BAD_EXTENDED_HEADER,
                 "SELF inspector rejects a declared file span beyond the container");
+    put_u64_be(self_image + 24, 0x200);
+    for (uint32_t i = 0; i < 16; ++i) self_image[0x300 + i] = (uint8_t)(0xa0u + i);
+    put_u64_be(self_image + 0x2a8, 0);
+    put_u32_be(self_image + 0x2a0, 1);
+    ok &= check(ppu_self_inspect_image(self_image, sizeof(self_image), &self_info) == PPU_SELF_OK,
+                "plain SELF fixture metadata validated before guest loading");
+    static uint8_t self_guest[32];
+    for (uint32_t i = 0; i < sizeof(self_guest); ++i) self_guest[i] = 0xcc;
+    ok &= check(ppu_self_load_plain_segments(self_image, sizeof(self_image), &self_info,
+                0x10000, self_guest, sizeof(self_guest)) == PPU_SELF_LOAD_OK &&
+                self_guest[0] == 0xa0 && self_guest[15] == 0xaf &&
+                self_guest[16] == 0 && self_guest[31] == 0,
+                "plain SELF PT_LOAD copied and BSS zeroed in guest memory");
+    for (uint32_t i = 0; i < sizeof(self_guest); ++i) self_guest[i] = 0x5a;
+    put_u64_be(self_image + 0x2a8, 1);
+    ok &= check(ppu_self_inspect_image(self_image, sizeof(self_image), &self_info) == PPU_SELF_OK &&
+                ppu_self_load_plain_segments(self_image, sizeof(self_image), &self_info,
+                0x10000, self_guest, sizeof(self_guest)) == PPU_SELF_LOAD_ENCRYPTED_SEGMENT &&
+                self_guest[0] == 0x5a && self_guest[31] == 0x5a,
+                "encrypted SELF segment refused before guest memory changes");
+    put_u64_be(self_image + 0x2a8, 0);
+    put_u32_be(self_image + 0x2a0, 2);
+    ok &= check(ppu_self_inspect_image(self_image, sizeof(self_image), &self_info) == PPU_SELF_OK &&
+                ppu_self_load_plain_segments(self_image, sizeof(self_image), &self_info,
+                0x10000, self_guest, sizeof(self_guest)) == PPU_SELF_LOAD_UNSUPPORTED_COMPRESSION &&
+                self_guest[0] == 0x5a && self_guest[31] == 0x5a,
+                "compressed SELF segment refused before guest memory changes");
     ExitProcess(ok ? 0u : 1u);
 }

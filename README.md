@@ -17,14 +17,14 @@ Aquí “nativo” significa un programa de Windows con interfaz y renderer prop
 ## Implemented so far / Implementado hasta ahora
 
 - Windows Vulkan probes: the Vega 8 exposes Vulkan 1.2; synthetic triangle and offscreen display paths have been exercised. These are not game benchmarks.
-- Asset-free PPU interpreter prototype: 233 synthetic checks cover selected PPU operations, bounded ELF loading, ISO9660 EBOOT lookup, and bounded SELF/ELF metadata parsing. The SELF inspector does not decrypt, extract, or execute game data.
+- Asset-free PPU interpreter prototype: 237 synthetic checks cover selected PPU operations, bounded ELF loading, ISO9660 EBOOT lookup, and bounded SELF/ELF parsing. A separate plain-segment loader accepts only unencrypted, uncompressed PT_LOAD segments and refuses encrypted segments before changing guest memory. It does not decrypt or execute game data.
 - A read-only scan of the user's ISO located `EBOOT.BIN` at byte offset 6,750,208 (5,465,224 bytes). Its SELF metadata exposes a PPC64 ELF entry at `0x50ddc0`, eight segment descriptors, and virtual memory ranges at `0x10000` and `0x500000`; payload encryption markers are set on the two nonempty program segments. This identifies the loader blocker; it does not reach PPU code or a menu.
 - Game data and firmware are not in the repository. The ISO is only memory-mapped read-only by the diagnostic host; no second copy or extracted file is created.
 
 ## Next gates / Siguientes etapas
 
 1. Grow a verified PPU decoder/interpreter and then a small x64 dynamic recompiler.
-2. Implement and validate a suitable SELF loader and supported PS3 execution path. Current code reports container/ELF metadata only; encrypted certification and executable segments are not loaded.
+2. The plain SELF loader is validated only with synthetic inputs. The retail game's encrypted certification and segments remain unavailable to it; a usable plaintext executable and title-required PS3 startup services are needed before game code can run.
 3. Discover the game’s required PS3 services and build only evidence-backed support.
 4. Implement SPU translation/scheduling and RSX command processing to Vulkan 1.2.
 5. Boot the title, measure representative gameplay on the target laptop, and only then assess 50–60 FPS.
@@ -47,9 +47,9 @@ This uses the local Zig compiler under ignored `work/` to build a native Windows
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Build-PpuHost.ps1
 ```
 
-The executable is written to `work\PpuHost\Gow3PpuHost.exe`. It accepts a raw big-endian PPC64 ELF for the synthetic harness, or reads an ISO in read-only mode to locate EBOOT and report SELF/ELF metadata. It does not load SELF payloads or implement PS3 syscall services, and cannot launch *God of War III*.
+The executable is written to `work\PpuHost\Gow3PpuHost.exe`. It accepts a raw big-endian PPC64 ELF for the synthetic harness, or reads an ISO in read-only mode to locate EBOOT and report SELF/ELF metadata. The plain-segment loader is limited to unencrypted, uncompressed test SELF inputs. PS3 syscall services are not implemented, and it cannot launch *God of War III*.
 
-El ejecutable queda en `work\PpuHost\Gow3PpuHost.exe`. Recibe un ELF PPC64 big-endian para el harness sintético, o inspecciona la ISO en modo de solo lectura para localizar EBOOT y mostrar la cabecera SELF. Aún no carga SELF ni implementa servicios PS3, así que todavía no inicia *God of War III*.
+El ejecutable queda en `work\PpuHost\Gow3PpuHost.exe`. Recibe un ELF PPC64 big-endian para el harness sintético, o inspecciona la ISO en modo de solo lectura para localizar EBOOT y mostrar la cabecera SELF. El cargador SELF solo acepta segmentos de prueba sin cifrar ni comprimir; no implementa servicios PS3 y todavía no inicia *God of War III*.
 
 ## GUI prototype / Prototipo con interfaz
 
@@ -64,7 +64,7 @@ Este comando abre `work\PpuGui\Gow3PpuGui.exe`, una ventana Win32 con selector d
 ## Repository map
 
 - `src/Gow3Runtime/ppu/`: initial asset-free PPU interpreter prototype.
-- `src/Gow3Runtime/ppu/ppu_elf.c`, `ppu_iso.c`, `ppu_self.c`: bounded ELF mapper, read-only ISO9660 EBOOT locator, and bounded SELF/ELF metadata parser; no SELF decryption/segment loader.
+- `src/Gow3Runtime/ppu/ppu_elf.c`, `ppu_iso.c`, `ppu_self.c`: bounded ELF mapper, read-only ISO9660 EBOOT locator, bounded SELF/ELF parser, and fail-closed loader for unencrypted, uncompressed SELF segments; no decryption.
 - `tools/Build-PpuPrototype.ps1`: build/run command for the PPU prototype.
 - `docs/approach.md`: standalone scope and gates; RPCS3 is excluded.
 - `docs/architecture.md`: component architecture and technical limits.

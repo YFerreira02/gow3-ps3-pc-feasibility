@@ -11,7 +11,7 @@ La app será un ejecutable propio de Windows y controlará interfaz, entrada, au
 | Component | Responsibility | State / Estado |
 |---|---|---|
 | Windows host | Window, input, audio output, logging, settings, crash handling | Experimental Win32 GUI and console PPU host; file picker, bounded ELF execution, and status output only; no game audio/input/settings yet |
-| Container/ELF readers | Locate EBOOT in an ISO9660 view; parse fixed SELF and bounded ELF/segment metadata; validate raw PPC64 big-endian ELF headers and PT_LOAD mapping | ISO locator and SELF metadata parser have synthetic checks; user's ISO reports ELF entry `0x50ddc0`, 8 program headers, and nonempty encrypted segment markers. Payloads remain unloaded |
+| Container/ELF readers | Locate EBOOT in an ISO9660 view; parse fixed SELF and bounded ELF/segment metadata; validate raw PPC64 big-endian ELF headers and PT_LOAD mapping; plain-only SELF PT_LOAD loader | ISO locator, SELF parser and plain-segment loader have synthetic checks. The user's ISO reports ELF entry `0x50ddc0`, 8 program headers, and encrypted nonempty program segments, which the loader refuses |
 | PPU core | PowerPC 64-bit register/state model, instruction decoding, exceptions, translation blocks | C reference core executes a limited integer/FPU subset with bounded run loop, CR/LR/CTR access, branches, and byte/halfword/word/doubleword loads/stores including tested base updates; synthetic checks pass |
 | PPU dynarec | Compile verified PPU blocks to x86-64, cache/invalidate, map exceptions | Not started |
 | PS3 services | Threads, virtual memory, filesystem, timers, synchronization, modules used by this title | Not implemented; the PPU core now reports `sc` to a future host-side dispatcher, but there is no syscall service yet |
@@ -24,7 +24,7 @@ La app será un ejecutable propio de Windows y controlará interfaz, entrada, au
 
 ```text
 user's ISO (read-only map) -> EBOOT locator -> SELF/ELF metadata inspection (implemented)
-  -> SELF certification/segment loader (not implemented; nonempty segments marked encrypted)
+  -> plain-only SELF segment loader (synthetic tests only; retail segments encrypted)
   -> ELF validation and memory map (raw ELF path only)
   -> PPU translated blocks + PS3 services
   -> SPU translated workloads + scheduling
@@ -33,7 +33,7 @@ user's ISO (read-only map) -> EBOOT locator -> SELF/ELF metadata inspection (imp
   -> Windows presentation
 ```
 
-Only ISO lookup and SELF/ELF metadata inspection are implemented for the user's ISO. The certification/segment loader, game PPU execution, services, SPU, RSX and Vulkan integration remain unfinished. The ISO is accessed by read-only memory mapping; no extracted or duplicate game files are created. No game content is tracked.
+Only ISO lookup and SELF/ELF metadata inspection are implemented for the user's ISO. The plain-only loader is validated on synthetic fixtures and explicitly refuses the encrypted retail segments. Game PPU execution, services, SPU, RSX and Vulkan integration remain unfinished. The ISO is accessed by read-only memory mapping; no extracted or duplicate game files are created. No game content is tracked.
 
 ## Important limits / Límites
 
