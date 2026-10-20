@@ -1200,5 +1200,30 @@ void entry(void)
     put_u32_be(self_header + 12, 0xffffffffu);
     ok &= check(ppu_self_parse_header(self_header, sizeof(self_header), &self_view) == PPU_SELF_BAD_METADATA_OFFSET,
                 "SELF parser rejects metadata offsets outside the input");
+
+    static uint8_t self_image[0x500] = { 0x53, 0x43, 0x45, 0x00 };
+    put_u32_be(self_image + 4, 2); put_u16_be(self_image + 8, 1); put_u16_be(self_image + 10, 1);
+    put_u32_be(self_image + 12, 0x400); put_u64_be(self_image + 16, 0x300);
+    put_u64_be(self_image + 24, 0x200);
+    put_u64_be(self_image + 0x20, 3); put_u64_be(self_image + 0x30, 0x90);
+    put_u64_be(self_image + 0x38, 0xd0); put_u64_be(self_image + 0x48, 0x290);
+    uint8_t *self_elf = self_image + 0x90;
+    self_elf[0] = 0x7f; self_elf[1] = 'E'; self_elf[2] = 'L'; self_elf[3] = 'F';
+    self_elf[4] = 2; self_elf[5] = 2; self_elf[6] = 1;
+    put_u16_be(self_elf + 18, 21); put_u64_be(self_elf + 24, 0x10000);
+    put_u64_be(self_elf + 32, 0x40); put_u16_be(self_elf + 52, 64);
+    put_u16_be(self_elf + 54, 56); put_u16_be(self_elf + 56, 1);
+    put_u64_be(self_image + 0x290, 0x300); put_u64_be(self_image + 0x298, 0x10);
+    put_u32_be(self_image + 0x2a0, 2); put_u64_be(self_image + 0x2a8, 1);
+    static PpuSelfImageInfo self_info;
+    ok &= check(ppu_self_inspect_image(self_image, sizeof(self_image), &self_info) == PPU_SELF_OK &&
+                self_info.extended_header_version == 3 && self_info.elf_entry == 0x10000 &&
+                self_info.program_header_count == 1 && self_info.segments[0].offset == 0x300 &&
+                self_info.segments[0].size == 0x10 && self_info.segments[0].compression == 2 &&
+                self_info.segments[0].encryption == 1,
+                "SELF inspector reads bounded ELF and segment metadata without touching payload");
+    put_u64_be(self_image + 0x290, UINT64_MAX - 3u);
+    ok &= check(ppu_self_inspect_image(self_image, sizeof(self_image), &self_info) == PPU_SELF_BAD_SEGMENT_METADATA,
+                "SELF inspector rejects segment payload spans outside the file");
     ExitProcess(ok ? 0u : 1u);
 }

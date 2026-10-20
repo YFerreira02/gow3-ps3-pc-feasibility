@@ -357,6 +357,19 @@ static void probe_iso_and_run(HWND window, const WCHAR16 *path, uint64_t budget)
             append_text(message, 512, L"la cabecera fija es invalida (codigo ");
             append_u64(message, 512, (uint64_t)parsed); append_text(message, 512, L").\r\n");
         }
+        static PpuSelfImageInfo details;
+        const PpuSelfResult details_result = ppu_self_inspect_image(eboot_bytes, (size_t)eboot.size, &details);
+        if (details_result == PPU_SELF_OK) {
+            append_text(message, 512, L"\r\nELF entry (decimal) ");
+            append_u64(message, 512, details.elf_entry);
+            append_text(message, 512, L", segmentos ");
+            append_u64(message, 512, details.program_header_count);
+            append_text(message, 512, L". Segmentos no cargados.");
+        } else {
+            append_text(message, 512, L"\r\nTabla ELF SELF invalida (codigo ");
+            append_u64(message, 512, (uint64_t)details_result);
+            append_text(message, 512, L").");
+        }
         append_text(message, 512, L"Solo se leyeron metadatos; no se descifro ni ejecuto el juego. ISO sin extraccion ni copia.");
         set_status(message);
     } else {

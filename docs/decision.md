@@ -16,9 +16,9 @@ Continuar un prototipo independiente de runtime PS3 específico para el juego. *
 - Host hardware report: Ryzen 5 3500U (4 cores / 8 threads), Radeon Vega 8, about 10 GB RAM; the supplied Task Manager image showed 92% memory use at that moment.
 - Prior project Vulkan probes reported Vulkan 1.2 on Vega 8 and rendered synthetic output. Offscreen throughput varied strongly with internal resolution. No game code/workload ran.
 - New PPU foundation in `src/Gow3Runtime/ppu/`: a C reference interpreter for a small, explicitly incomplete subset of integer, branch, and memory instructions. A standalone Windows console host now loads raw PPC64 ELF files and runs to a bounded budget or syscall handoff; only synthetic input has been used. This is not a game-compatible CPU or launcher.
-- The Windows x64 PPU prototype builds with Zig 0.17.0 and currently passes 228 synthetic checks. The separate console and GUI builds also succeed. The earlier Zig 0.15.2 package is incomplete and was not used for that result.
+- The Windows x64 PPU prototype builds with Zig 0.17.0 and currently passes 230 synthetic checks. The separate console and GUI builds also succeed. The earlier Zig 0.15.2 package is incomplete and was not used for that result.
 - Legacy RPCS3 launcher/profile-writer files were removed from the current source tree as part of the standalone pivot; they remain only in Git history.
-- The user's ISO was memory-mapped read-only to locate EBOOT and parse its fixed SELF header. No game content was extracted, decrypted, executed, copied, or moved. No game file is in Git.
+- The user's ISO was memory-mapped read-only to locate EBOOT and inspect SELF/ELF metadata. No game content was extracted, decrypted, executed, copied, or moved. No game file is in Git.
 
 ## Risks and gates / Riesgos y etapas
 
