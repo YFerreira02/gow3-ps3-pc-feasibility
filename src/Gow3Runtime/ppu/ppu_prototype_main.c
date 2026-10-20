@@ -45,6 +45,8 @@ static uint8_t put_iso_record(uint8_t *p, uint32_t extent, uint32_t size,
 #define D_FORM(op, rt, ra, imm) (((uint32_t)(op) << 26) | ((uint32_t)(rt) << 21) | ((uint32_t)(ra) << 16) | (uint16_t)(imm))
 #define X_FORM(rt, ra, rb, xo, rc) ((31u << 26) | ((uint32_t)(rt) << 21) | \
     ((uint32_t)(ra) << 16) | ((uint32_t)(rb) << 11) | ((uint32_t)(xo) << 1) | (rc))
+#define VX_FORM(vd, va, vb, xo) ((4u << 26) | ((uint32_t)(vd) << 21) | \
+    ((uint32_t)(va) << 16) | ((uint32_t)(vb) << 11) | (uint32_t)(xo))
 #define ISEL_FORM(rt, ra, rb, bc) ((31u << 26) | ((uint32_t)(rt) << 21) | \
     ((uint32_t)(ra) << 16) | ((uint32_t)(rb) << 11) | ((uint32_t)(bc) << 6) | (15u << 1))
 #define ROT_FORM(op, rs, ra, sh, mb, me, rc) (((uint32_t)(op) << 26) | \
@@ -118,6 +120,42 @@ void entry(void)
                 "addi sign extension");
     ok &= check(ppu_step(&state) == PPU_STEP_BAD_ARGUMENT,
                 "out-of-range instruction fetch rejected");
+
+    static uint8_t vmx_code[24];
+    EMIT_BE(vmx_code, 0, VX_FORM(3, 1, 2, 0));    /* vaddubm */
+    EMIT_BE(vmx_code, 1, VX_FORM(3, 1, 2, 64));   /* vadduhm */
+    EMIT_BE(vmx_code, 2, VX_FORM(3, 1, 2, 128));  /* vadduwm */
+    EMIT_BE(vmx_code, 3, VX_FORM(3, 1, 2, 1028)); /* vand */
+    EMIT_BE(vmx_code, 4, VX_FORM(3, 1, 2, 1156)); /* vor */
+    EMIT_BE(vmx_code, 5, VX_FORM(3, 1, 2, 1220)); /* vxor */
+    ppu_state_init(&state, vmx_code, sizeof(vmx_code), 0);
+    for (size_t i = 0; i < 16; ++i) {
+        state.vr[1][i] = 0xff;
+        state.vr[2][i] = 1;
+    }
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.vr[3][0] == 0 && state.vr[3][15] == 0,
+                "vaddubm adds unsigned byte lanes modulo 256");
+    state.vr[1][0] = 0xff; state.vr[1][1] = 0xff;
+    state.vr[1][2] = 0; state.vr[1][3] = 1;
+    state.vr[2][0] = 0; state.vr[2][1] = 1;
+    state.vr[2][2] = 0; state.vr[2][3] = 2;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.vr[3][0] == 0 &&
+                state.vr[3][1] == 0 && state.vr[3][3] == 3,
+                "vadduhm adds big-endian halfword lanes modulo 65536");
+    state.vr[1][0] = 0xff; state.vr[1][1] = 0xff;
+    state.vr[1][2] = 0xff; state.vr[1][3] = 0xff;
+    state.vr[1][7] = 1;
+    state.vr[2][3] = 1; state.vr[2][7] = 2;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.vr[3][0] == 0 &&
+                state.vr[3][3] == 0 && state.vr[3][7] == 3,
+                "vadduwm adds big-endian word lanes modulo 2^32");
+    for (size_t i = 0; i < 16; ++i) { state.vr[1][i] = 0xa5; state.vr[2][i] = 0x3c; }
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.vr[3][0] == 0x24,
+                "vand combines all 128 vector bits");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.vr[3][0] == 0xbd,
+                "vor combines all 128 vector bits");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.vr[3][0] == 0x99,
+                "vxor combines all 128 vector bits");
 
     static uint8_t immediate_carry[16];
     EMIT_BE(immediate_carry, 0, D_FORM(12, 5, 3, 1)); /* addic */

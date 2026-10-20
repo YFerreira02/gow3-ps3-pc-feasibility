@@ -19,6 +19,7 @@ typedef PpuStepResult (*PpuSyscallHandler)(struct PpuStateTag *state, void *cont
 typedef struct PpuStateTag {
     uint64_t gpr[32];
     double fpr[32];
+    uint8_t vr[32][16];
     uint32_t fpr_integer_word[32];
     uint8_t fpr_integer_word_valid[32];
     uint64_t pc;
