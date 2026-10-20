@@ -89,6 +89,14 @@ static int check(int condition, const char *message)
     return condition;
 }
 
+static PpuStepResult test_syscall_handler(PpuState *state, void *context)
+{
+    uint32_t *calls = (uint32_t *)context;
+    ++*calls;
+    state->gpr[3] = 0;
+    return PPU_STEP_OK;
+}
+
 void entry(void)
 {
     static uint8_t code[16];
@@ -144,6 +152,12 @@ void entry(void)
     uint64_t executed = 0;
     ok &= check(ppu_run(&state, 1, &executed) == PPU_STEP_SYSCALL && executed == 1,
                 "bounded PPU runner stops at the syscall handoff");
+    ppu_state_init(&state, syscall_code, sizeof(syscall_code), 0);
+    uint32_t dispatched_syscalls = 0;
+    ok &= check(ppu_run_with_syscall_handler(&state, 1, &executed, test_syscall_handler,
+                                             &dispatched_syscalls) == PPU_STEP_LIMIT_REACHED &&
+                executed == 1 && dispatched_syscalls == 1 && state.gpr[3] == 0,
+                "bounded PPU runner invokes a host syscall callback and resumes");
 
     static uint8_t loop_code[8];
     EMIT_BE(loop_code, 0, D_FORM(14, 3, 3, 1));

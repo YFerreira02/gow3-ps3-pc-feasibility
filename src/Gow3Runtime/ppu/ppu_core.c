@@ -1389,7 +1389,9 @@ PpuStepResult ppu_step(PpuState *state)
     return PPU_STEP_OK;
 }
 
-PpuStepResult ppu_run(PpuState *state, uint64_t instruction_budget, uint64_t *executed)
+PpuStepResult ppu_run_with_syscall_handler(PpuState *state, uint64_t instruction_budget,
+                                           uint64_t *executed, PpuSyscallHandler handler,
+                                           void *handler_context)
 {
     uint64_t count = 0;
     if (executed)
@@ -1404,10 +1406,22 @@ PpuStepResult ppu_run(PpuState *state, uint64_t instruction_budget, uint64_t *ex
         }
         ++count;
         if (result == PPU_STEP_SYSCALL) {
-            if (executed) *executed = count;
-            return result;
+            if (!handler) {
+                if (executed) *executed = count;
+                return result;
+            }
+            const PpuStepResult dispatch_result = handler(state, handler_context);
+            if (dispatch_result != PPU_STEP_OK) {
+                if (executed) *executed = count;
+                return dispatch_result;
+            }
         }
     }
     if (executed) *executed = count;
     return PPU_STEP_LIMIT_REACHED;
+}
+
+PpuStepResult ppu_run(PpuState *state, uint64_t instruction_budget, uint64_t *executed)
+{
+    return ppu_run_with_syscall_handler(state, instruction_budget, executed, 0, 0);
 }

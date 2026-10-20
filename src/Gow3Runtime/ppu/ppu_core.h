@@ -13,7 +13,10 @@ typedef enum PpuStepResult {
     PPU_STEP_LIMIT_REACHED = 5
 } PpuStepResult;
 
-typedef struct PpuState {
+struct PpuStateTag;
+typedef PpuStepResult (*PpuSyscallHandler)(struct PpuStateTag *state, void *context);
+
+typedef struct PpuStateTag {
     uint64_t gpr[32];
     double fpr[32];
     uint32_t fpr_integer_word[32];
@@ -43,5 +46,8 @@ void ppu_set_memory(PpuState *state, uint8_t *memory, size_t memory_size);
 void ppu_set_memory_at(PpuState *state, uint8_t *memory, size_t memory_size, uint64_t guest_base);
 PpuStepResult ppu_step(PpuState *state);
 PpuStepResult ppu_run(PpuState *state, uint64_t instruction_budget, uint64_t *executed);
+PpuStepResult ppu_run_with_syscall_handler(PpuState *state, uint64_t instruction_budget,
+                                           uint64_t *executed, PpuSyscallHandler handler,
+                                           void *handler_context);
 
 #endif
