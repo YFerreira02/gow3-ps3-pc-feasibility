@@ -26,6 +26,9 @@ typedef struct PpuState {
     uint8_t xer_ov;
     uint8_t xer_ca;
     uint8_t xer_bc;
+    uint64_t reservation_address;
+    uint32_t reservation_raw_value;
+    uint8_t reservation_valid;
     const uint8_t *code;
     size_t code_size;
     uint64_t code_base;

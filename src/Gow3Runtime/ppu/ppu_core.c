@@ -1,5 +1,6 @@
 #include "ppu_core.h"
 
+
 static uint32_t read_instruction_be(const uint8_t *p)
 {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
@@ -174,6 +175,9 @@ void ppu_state_init(PpuState *state, const uint8_t *code, size_t code_size, uint
     state->xer_ov = 0;
     state->xer_ca = 0;
     state->xer_bc = 0;
+    state->reservation_address = 0;
+    state->reservation_raw_value = 0;
+    state->reservation_valid = 0;
     state->code = code;
     state->code_size = code_size;
     state->code_base = 0;
@@ -596,6 +600,54 @@ PpuStepResult ppu_step(PpuState *state)
         const uint32_t xo = (insn >> 1) & 0x3ffu;
         const int record = (insn & 1u) != 0;
         uint64_t result;
+        if (xo == 20u) { /* lwarx: atomic word load with reservation */
+            if (record)
+                return PPU_STEP_UNSUPPORTED;
+            const uint64_t indexed_base = ra == 0 ? 0 : state->gpr[ra];
+            if (indexed_base > UINT64_MAX - state->gpr[rb])
+                return PPU_STEP_MEMORY_FAULT;
+            const uint64_t effective_address = indexed_base + state->gpr[rb];
+            size_t memory_offset;
+            if ((effective_address & 3u) != 0 ||
+                !memory_range_offset(state, effective_address, 4, &memory_offset))
+                return PPU_STEP_MEMORY_FAULT;
+            uint32_t raw = __atomic_load_n((uint32_t *)(void *)(state->memory + memory_offset),
+                                           __ATOMIC_SEQ_CST);
+            state->reservation_address = effective_address;
+            state->reservation_raw_value = raw;
+            state->reservation_valid = 1;
+            state->gpr[rt] = ((uint64_t)(raw & 0xffu) << 24) |
+                ((uint64_t)((raw >> 8) & 0xffu) << 16) |
+                ((uint64_t)((raw >> 16) & 0xffu) << 8) | (uint64_t)(raw >> 24);
+            state->pc += 4;
+            return PPU_STEP_OK;
+        }
+        if (xo == 150u) { /* stwcx.: conditional atomic store and CR0 status */
+            if (!record)
+                return PPU_STEP_UNSUPPORTED;
+            const uint64_t indexed_base = ra == 0 ? 0 : state->gpr[ra];
+            if (indexed_base > UINT64_MAX - state->gpr[rb])
+                return PPU_STEP_MEMORY_FAULT;
+            const uint64_t effective_address = indexed_base + state->gpr[rb];
+            size_t memory_offset;
+            if ((effective_address & 3u) != 0 ||
+                !memory_range_offset(state, effective_address, 4, &memory_offset))
+                return PPU_STEP_MEMORY_FAULT;
+            int succeeded = 0;
+            if (state->reservation_valid && state->reservation_address == effective_address) {
+                const uint32_t value = (uint32_t)state->gpr[rt];
+                const uint32_t desired_raw = ((value & 0xffu) << 24) |
+                    ((value & 0xff00u) << 8) | ((value >> 8) & 0xff00u) | (value >> 24);
+                uint32_t expected_raw = state->reservation_raw_value;
+                succeeded = __atomic_compare_exchange_n(
+                    (uint32_t *)(void *)(state->memory + memory_offset), &expected_raw,
+                    desired_raw, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+            }
+            state->reservation_valid = 0;
+            set_cr_field(state, 0, succeeded ? 1u : 0u);
+            state->pc += 4;
+            return PPU_STEP_OK;
+        }
         if ((xo & 31u) == 15u) { /* isel uses an A-form with BC in XO's upper bits */
             const uint32_t condition_bit = (insn >> 6) & 31u;
             if (record)

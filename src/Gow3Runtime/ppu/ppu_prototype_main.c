@@ -862,6 +862,31 @@ void entry(void)
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[3] == 32 && indexed_memory[32] == 0xfe,
                 "stdux stores an indexed doubleword and updates its base");
 
+    static uint8_t atomic_code[8];
+    static uint8_t atomic_memory[16] = { 0, 0, 0, 0, 0x11, 0x22, 0x33, 0x44 };
+    EMIT_BE(atomic_code, 0, X_FORM(3, 4, 5, 20, 0)); /* lwarx r3,r4,r5 */
+    EMIT_BE(atomic_code, 1, X_FORM(6, 4, 5, 150, 1)); /* stwcx. r6,r4,r5 */
+    ppu_state_init(&state, atomic_code, sizeof(atomic_code), 0);
+    ppu_set_memory(&state, atomic_memory, sizeof(atomic_memory));
+    state.gpr[5] = 4;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.gpr[3] == 0x11223344 && state.reservation_valid,
+                "lwarx atomically loads a big-endian word and records its reservation");
+    state.gpr[6] = 0xaabbccddu;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && atomic_memory[4] == 0xaa &&
+                atomic_memory[7] == 0xdd && ((state.cr >> 28) & 0xfu) == 2u,
+                "stwcx. commits when the reserved word is unchanged and sets CR0 EQ");
+    atomic_memory[4] = 0x11; atomic_memory[5] = 0x22;
+    atomic_memory[6] = 0x33; atomic_memory[7] = 0x44;
+    ppu_state_init(&state, atomic_code, sizeof(atomic_code), 0);
+    ppu_set_memory(&state, atomic_memory, sizeof(atomic_memory));
+    state.gpr[5] = 4;
+    (void)ppu_step(&state);
+    atomic_memory[4] = 0x55;
+    state.gpr[6] = 0xaabbccddu;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && atomic_memory[4] == 0x55 &&
+                ((state.cr >> 28) & 0xfu) == 0u,
+                "stwcx. refuses to commit after the reserved word changes");
+
     static uint8_t halfword_code[12];
     EMIT_BE(halfword_code, 0, D_FORM(40, 7, 0, 0)); /* lhz r7,0(0) */
     EMIT_BE(halfword_code, 1, D_FORM(42, 8, 0, 0)); /* lha r8,0(0) */
