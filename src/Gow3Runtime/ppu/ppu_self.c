@@ -75,6 +75,10 @@ PpuSelfResult ppu_self_inspect_image(const uint8_t *bytes, size_t size,
         !span_in_file(size, elf_header_offset, 64) ||
         !span_in_file(size, segment_ext_offset, 0))
         return PPU_SELF_BAD_EXTENDED_HEADER;
+    if (elf_header_offset < 32u + 0x50u || elf_header_offset >= fixed.metadata_offset ||
+        segment_ext_offset >= fixed.metadata_offset || fixed.header_size > size ||
+        fixed.data_size > (uint64_t)size - fixed.header_size)
+        return PPU_SELF_BAD_EXTENDED_HEADER;
 
     const uint8_t *elf = bytes + (size_t)elf_header_offset;
     if (elf[0] != 0x7f || elf[1] != 'E' || elf[2] != 'L' || elf[3] != 'F' ||
@@ -82,9 +86,11 @@ PpuSelfResult ppu_self_inspect_image(const uint8_t *bytes, size_t size,
         return PPU_SELF_BAD_ELF_METADATA;
     info->elf_machine = read_u16_be(elf + 18);
     info->elf_entry = read_u64_be(elf + 24);
+    const uint64_t elf_phoff = read_u64_be(elf + 32);
     const uint16_t elf_phentsize = read_u16_be(elf + 54);
     info->program_header_count = read_u16_be(elf + 56);
-    if (read_u64_be(elf + 32) != 64 || phdr_offset != elf_header_offset + read_u64_be(elf + 32) ||
+    if (info->elf_machine != 21 || elf_phoff > UINT64_MAX - elf_header_offset ||
+        elf_phoff != 64 || phdr_offset != elf_header_offset + elf_phoff ||
         elf_phentsize != 56 || info->program_header_count == 0 ||
         info->program_header_count > PPU_SELF_MAX_SEGMENTS ||
         !span_in_file(size, phdr_offset, (uint64_t)info->program_header_count * 56u) ||
@@ -95,11 +101,19 @@ PpuSelfResult ppu_self_inspect_image(const uint8_t *bytes, size_t size,
     for (uint16_t i = 0; i < info->program_header_count; ++i) {
         const uint8_t *segment = bytes + (size_t)(segment_ext_offset + (uint64_t)i * 32u);
         PpuSelfSegmentInfo *out = &info->segments[i];
+        const uint8_t *program_header = bytes + (size_t)(phdr_offset + (uint64_t)i * 56u);
+        out->program_type = read_u32_be(program_header);
+        out->program_flags = read_u32_be(program_header + 4);
+        out->virtual_address = read_u64_be(program_header + 16);
+        out->memory_size = read_u64_be(program_header + 40);
         out->offset = read_u64_be(segment);
         out->size = read_u64_be(segment + 8);
         out->compression = read_u32_be(segment + 16);
         out->encryption = read_u64_be(segment + 24);
-        if (!span_in_file(size, out->offset, out->size))
+        if (!span_in_file(size, out->offset, out->size) ||
+            (out->size != 0 && out->offset < fixed.header_size) ||
+            out->memory_size < read_u64_be(program_header + 32) ||
+            out->virtual_address > UINT64_MAX - out->memory_size)
             return PPU_SELF_BAD_SEGMENT_METADATA;
     }
     return PPU_SELF_OK;

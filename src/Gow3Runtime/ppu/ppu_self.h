@@ -27,6 +27,10 @@ typedef struct PpuSelfView {
 #define PPU_SELF_MAX_SEGMENTS 64u
 
 typedef struct PpuSelfSegmentInfo {
+    uint32_t program_type;
+    uint32_t program_flags;
+    uint64_t virtual_address;
+    uint64_t memory_size;
     uint64_t offset;
     uint64_t size;
     uint32_t compression;

@@ -17,8 +17,8 @@ Aquí “nativo” significa un programa de Windows con interfaz y renderer prop
 ## Implemented so far / Implementado hasta ahora
 
 - Windows Vulkan probes: the Vega 8 exposes Vulkan 1.2; synthetic triangle and offscreen display paths have been exercised. These are not game benchmarks.
-- Asset-free PPU interpreter prototype: 230 synthetic checks cover selected PPU operations, bounded ELF loading, ISO9660 EBOOT lookup, and bounded SELF/ELF metadata parsing. The SELF inspector does not decrypt, extract, or execute game data.
-- A read-only scan of the user's ISO located `EBOOT.BIN` at byte offset 6,750,208 (5,465,224 bytes). Its SELF metadata exposes a PPC64 ELF entry at `0x50ddc0` and eight segment descriptors; payload encryption markers are set on the two nonempty program segments. This identifies the loader blocker; it does not reach PPU code or a menu.
+- Asset-free PPU interpreter prototype: 233 synthetic checks cover selected PPU operations, bounded ELF loading, ISO9660 EBOOT lookup, and bounded SELF/ELF metadata parsing. The SELF inspector does not decrypt, extract, or execute game data.
+- A read-only scan of the user's ISO located `EBOOT.BIN` at byte offset 6,750,208 (5,465,224 bytes). Its SELF metadata exposes a PPC64 ELF entry at `0x50ddc0`, eight segment descriptors, and virtual memory ranges at `0x10000` and `0x500000`; payload encryption markers are set on the two nonempty program segments. This identifies the loader blocker; it does not reach PPU code or a menu.
 - Game data and firmware are not in the repository. The ISO is only memory-mapped read-only by the diagnostic host; no second copy or extracted file is created.
 
 ## Next gates / Siguientes etapas

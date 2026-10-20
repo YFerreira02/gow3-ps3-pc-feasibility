@@ -1213,6 +1213,9 @@ void entry(void)
     put_u16_be(self_elf + 18, 21); put_u64_be(self_elf + 24, 0x10000);
     put_u64_be(self_elf + 32, 0x40); put_u16_be(self_elf + 52, 64);
     put_u16_be(self_elf + 54, 56); put_u16_be(self_elf + 56, 1);
+    put_u32_be(self_image + 0xd0, 1); put_u32_be(self_image + 0xd4, 5);
+    put_u64_be(self_image + 0xe0, 0x10000); put_u64_be(self_image + 0xf0, 0x10);
+    put_u64_be(self_image + 0xf8, 0x20);
     put_u64_be(self_image + 0x290, 0x300); put_u64_be(self_image + 0x298, 0x10);
     put_u32_be(self_image + 0x2a0, 2); put_u64_be(self_image + 0x2a8, 1);
     static PpuSelfImageInfo self_info;
@@ -1220,10 +1223,23 @@ void entry(void)
                 self_info.extended_header_version == 3 && self_info.elf_entry == 0x10000 &&
                 self_info.program_header_count == 1 && self_info.segments[0].offset == 0x300 &&
                 self_info.segments[0].size == 0x10 && self_info.segments[0].compression == 2 &&
-                self_info.segments[0].encryption == 1,
-                "SELF inspector reads bounded ELF and segment metadata without touching payload");
+                self_info.segments[0].encryption == 1 && self_info.segments[0].virtual_address == 0x10000 &&
+                self_info.segments[0].memory_size == 0x20 && self_info.segments[0].program_flags == 5,
+                "SELF inspector reads bounded ELF, address, and segment metadata without touching payload");
     put_u64_be(self_image + 0x290, UINT64_MAX - 3u);
     ok &= check(ppu_self_inspect_image(self_image, sizeof(self_image), &self_info) == PPU_SELF_BAD_SEGMENT_METADATA,
                 "SELF inspector rejects segment payload spans outside the file");
+    put_u64_be(self_image + 0x290, 0x300);
+    put_u64_be(self_image + 0xe0, UINT64_MAX - 4u);
+    ok &= check(ppu_self_inspect_image(self_image, sizeof(self_image), &self_info) == PPU_SELF_BAD_SEGMENT_METADATA,
+                "SELF inspector rejects overflowing guest virtual-memory spans");
+    put_u64_be(self_image + 0xe0, 0x10000);
+    put_u16_be(self_elf + 18, 3);
+    ok &= check(ppu_self_inspect_image(self_image, sizeof(self_image), &self_info) == PPU_SELF_BAD_ELF_METADATA,
+                "SELF inspector rejects non-PPC64 payload metadata");
+    put_u16_be(self_elf + 18, 21);
+    put_u64_be(self_image + 24, 0xffffffffffffffffull);
+    ok &= check(ppu_self_inspect_image(self_image, sizeof(self_image), &self_info) == PPU_SELF_BAD_EXTENDED_HEADER,
+                "SELF inspector rejects a declared file span beyond the container");
     ExitProcess(ok ? 0u : 1u);
 }

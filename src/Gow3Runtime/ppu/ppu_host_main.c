@@ -203,7 +203,7 @@ static int probe_iso(const WCHAR16 *path)
                 write_text("SCE magic found, but fixed SELF header validation failed. Code: ");
                 write_u64((uint64_t)self_result); write_text("\r\n");
             }
-            PpuSelfImageInfo details;
+            static PpuSelfImageInfo details;
             const PpuSelfResult details_result = ppu_self_inspect_image(header, (size_t)eboot.size, &details);
             if (details_result == PPU_SELF_OK) {
                 write_text("SELF ELF metadata: machine "); write_u64(details.elf_machine);
@@ -212,7 +212,9 @@ static int probe_iso(const WCHAR16 *path)
                 write_text(". Segment descriptors (payload offset, size, compression, encryption marker):\r\n");
                 for (uint16_t i = 0; i < details.program_header_count; ++i) {
                     const PpuSelfSegmentInfo *segment = &details.segments[i];
-                    write_text("  "); write_u64(i); write_text(": 0x"); write_hex_u64(segment->offset);
+                    write_text("  "); write_u64(i); write_text(": vaddr 0x"); write_hex_u64(segment->virtual_address);
+                    write_text(", mem 0x"); write_hex_u64(segment->memory_size);
+                    write_text(", payload 0x"); write_hex_u64(segment->offset);
                     write_text(", 0x"); write_hex_u64(segment->size);
                     write_text(", "); write_u64(segment->compression);
                     write_text(", "); write_u64(segment->encryption); write_text("\r\n");
