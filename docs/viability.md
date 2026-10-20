@@ -4,6 +4,12 @@
 **Target / Objetivo:** Windows 11 x64; Ryzen 5 3500U (4C/8T); Radeon Vega 8; about 10 GB RAM; Vulkan 1.2 minimum.
 **Goal / Meta:** adjustable resolution and 50–60 FPS; unverified.
 
+## Reference project compatibility audit
+
+The linked `FelipePrado0/gow3_pc` repository now redirects to SpartanPort. Its README describes a port of **God of War III Remastered for PS4**, running the original x86-64 game code on the host CPU with a custom runtime and shadPS4's Vulkan video core. It requires a PS4 game dump (tested CUSA01623/CUSA01715, versions 01.00/01.02) and a graphics stack supporting Vulkan 1.3. This is not a loader or port of the PS3 PPC64/SELF executable in the user's ISO. The PC reports Vulkan 1.2, below SpartanPort's documented requirement. Therefore SpartanPort cannot directly use this PS3 ISO, and its current requirements do not match this PC. Sources: [SpartanPort repository](https://github.com/FelipePrado0/SpartanPort), [README requirements and architecture](https://github.com/FelipePrado0/SpartanPort#download-and-play).
+
+Reproducing that reference approach would require the PS4 Remastered executable and a Vulkan 1.3-capable graphics stack. Using the current PS3 ISO instead requires a separate PS3 compatibility runtime (PPU, SPU, PS3 services, and RSX translation), plus access to a usable executable image. Neither route currently yields a playable build on the confirmed inputs and hardware.
+
 ## Scope / Alcance
 
 Build an independent Windows runtime for the PS3 edition of *God of War III*. RPCS3 is excluded from the product. “Native” means a standalone Windows host application; PPU/SPU translation and PS3 service emulation remain necessary. The project is experimental and not playable.

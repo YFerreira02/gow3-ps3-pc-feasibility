@@ -6,6 +6,8 @@
 
 ## Direction / Dirección
 
+The linked reference now redirects to SpartanPort, a PS4 Remastered x86-64 port that documents Vulkan 1.3. It cannot run the PS3 ISO in this project, and this PC reports Vulkan 1.2. See the [reference compatibility audit](docs/viability.md#reference-project-compatibility-audit).
+
 This project aims to build a **standalone Windows app** for the PS3 edition of *God of War III*. **RPCS3 is excluded from the product and runtime path.** There is no RPCS3 launcher or dependency in the current source tree.
 
 Este proyecto busca crear una **app independiente para Windows** para la versión de PS3 de *God of War III*. **RPCS3 queda fuera del producto y de la ruta de ejecución.** El árbol actual no contiene launcher ni dependencia para ese emulador.

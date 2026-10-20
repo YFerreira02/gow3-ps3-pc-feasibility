@@ -5,6 +5,9 @@
 
 ## Decision / Decisión
 
+- Reference audit: the linked repository now identifies itself as SpartanPort, a PS4 Remastered x86-64 runtime using shadPS4 Vulkan and documenting Vulkan 1.3. It does not support the user's PS3 ISO, and the user's GPU reports Vulkan 1.2. Direct adoption therefore does not meet the target.
+- A true PS3 route is a separate compatibility-runtime project (PPU, SPU, PS3 services, RSX/Vulkan) and the inspected PS3 SELF has encrypted program segments. The current prototype cannot reach the menu with the available input.
+
 Proceed with a standalone, game-specific PS3 runtime prototype. **RPCS3 is not part of the product path.** Its launcher and profile-writer sources have been removed from the current branch. The product is not playable and the 50–60 FPS goal is unverified.
 
 Continuar un prototipo independiente de runtime PS3 específico para el juego. **RPCS3 no forma parte de la ruta del producto.** Sus fuentes antiguas del launcher y perfiles se quitaron de la rama actual. El producto no es jugable y la meta de 50–60 FPS no está verificada.
