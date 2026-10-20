@@ -666,6 +666,24 @@ PpuStepResult ppu_step(PpuState *state)
         const uint32_t xo = (insn >> 1) & 0x3ffu;
         const int record = (insn & 1u) != 0;
         uint64_t result;
+        if (xo == 103u || xo == 359u || xo == 231u || xo == 487u) {
+            const int is_load = xo == 103u || xo == 359u;
+            const uint64_t indexed_base = ra == 0 ? 0 : state->gpr[ra];
+            if (record || indexed_base > UINT64_MAX - state->gpr[rb])
+                return record ? PPU_STEP_UNSUPPORTED : PPU_STEP_MEMORY_FAULT;
+            const uint64_t vector_address = (indexed_base + state->gpr[rb]) & ~15ull;
+            size_t memory_offset;
+            if (!memory_range_offset(state, vector_address, 16u, &memory_offset))
+                return PPU_STEP_MEMORY_FAULT;
+            for (size_t i = 0; i < 16u; ++i) {
+                if (is_load)
+                    state->vr[rt][i] = state->memory[memory_offset + i];
+                else
+                    state->memory[memory_offset + i] = state->vr[rt][i];
+            }
+            state->pc += 4;
+            return PPU_STEP_OK;
+        }
         if (xo == 598u || xo == 854u) { /* sync / eieio ordering barriers */
             if (record)
                 return PPU_STEP_UNSUPPORTED;

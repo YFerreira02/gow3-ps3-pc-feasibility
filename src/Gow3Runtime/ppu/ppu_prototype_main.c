@@ -156,6 +156,22 @@ void entry(void)
                 "vor combines all 128 vector bits");
     ok &= check(ppu_step(&state) == PPU_STEP_OK && state.vr[3][0] == 0x99,
                 "vxor combines all 128 vector bits");
+    static uint8_t vmx_memory_code[8];
+    static uint8_t vmx_memory[32];
+    for (size_t i = 0; i < sizeof(vmx_memory); ++i)
+        vmx_memory[i] = (uint8_t)i;
+    EMIT_BE(vmx_memory_code, 0, X_FORM(3, 4, 5, 103, 0)); /* lvx */
+    EMIT_BE(vmx_memory_code, 1, X_FORM(3, 4, 6, 231, 0)); /* stvx */
+    ppu_state_init(&state, vmx_memory_code, sizeof(vmx_memory_code), 0);
+    ppu_set_memory(&state, vmx_memory, sizeof(vmx_memory));
+    state.gpr[5] = 3;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && state.vr[3][0] == 0 &&
+                state.vr[3][15] == 15,
+                "lvx loads the 16-byte block containing its effective address");
+    state.gpr[6] = 19; state.vr[3][0] = 0xee;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && vmx_memory[16] == 0xee &&
+                vmx_memory[31] == 15,
+                "stvx stores a 128-bit vector to the aligned effective-address block");
 
     static uint8_t immediate_carry[16];
     EMIT_BE(immediate_carry, 0, D_FORM(12, 5, 3, 1)); /* addic */
