@@ -887,6 +887,24 @@ void entry(void)
                 ((state.cr >> 28) & 0xfu) == 0u,
                 "stwcx. refuses to commit after the reserved word changes");
 
+    static uint8_t cache_code[16];
+    static uint8_t cache_memory[256];
+    for (size_t i = 0; i < sizeof(cache_memory); ++i)
+        cache_memory[i] = 0xa5;
+    EMIT_BE(cache_code, 0, X_FORM(0, 4, 5, 1014, 0)); /* dcbz r4,r5 */
+    EMIT_BE(cache_code, 1, X_FORM(0, 0, 0, 598, 0)); /* sync */
+    EMIT_BE(cache_code, 2, X_FORM(0, 0, 0, 854, 0)); /* eieio */
+    EMIT_BE(cache_code, 3, CR_FORM(0, 0, 0, 150)); /* isync */
+    ppu_state_init(&state, cache_code, sizeof(cache_code), 0);
+    ppu_set_memory(&state, cache_memory, sizeof(cache_memory));
+    state.gpr[4] = 0x7f;
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && cache_memory[0] == 0 &&
+                cache_memory[127] == 0 && cache_memory[128] == 0xa5,
+                "dcbz clears the containing aligned 128-byte Cell PPE cache block");
+    ok &= check(ppu_step(&state) == PPU_STEP_OK && ppu_step(&state) == PPU_STEP_OK &&
+                ppu_step(&state) == PPU_STEP_OK && state.pc == 16,
+                "sync, eieio, and isync act as host memory-ordering barriers");
+
     static uint8_t halfword_code[12];
     EMIT_BE(halfword_code, 0, D_FORM(40, 7, 0, 0)); /* lhz r7,0(0) */
     EMIT_BE(halfword_code, 1, D_FORM(42, 8, 0, 0)); /* lha r8,0(0) */

@@ -445,6 +445,13 @@ PpuStepResult ppu_step(PpuState *state)
         const uint32_t bi = (insn >> 16) & 31u;
         const uint32_t xo = (insn >> 1) & 0x3ffu;
         const uint64_t next_pc = state->pc + 4;
+        if (xo == 150u) { /* isync: synchronize instruction stream */
+            if ((insn & 1u) != 0)
+                return PPU_STEP_UNSUPPORTED;
+            __atomic_thread_fence(__ATOMIC_SEQ_CST);
+            state->pc = next_pc;
+            return PPU_STEP_OK;
+        }
         if (xo == 0u) { /* mcrf: move one condition-register field */
             const uint32_t bf = (insn >> 23) & 7u;
             const uint32_t bfa = (insn >> 18) & 7u;
@@ -600,6 +607,36 @@ PpuStepResult ppu_step(PpuState *state)
         const uint32_t xo = (insn >> 1) & 0x3ffu;
         const int record = (insn & 1u) != 0;
         uint64_t result;
+        if (xo == 598u || xo == 854u) { /* sync / eieio ordering barriers */
+            if (record)
+                return PPU_STEP_UNSUPPORTED;
+            __atomic_thread_fence(__ATOMIC_SEQ_CST);
+            state->pc += 4;
+            return PPU_STEP_OK;
+        }
+        if (xo == 54u || xo == 86u || xo == 246u || xo == 278u ||
+            xo == 470u || xo == 758u || xo == 982u) {
+            /* dcbst, dcbf, dcbtst, dcbt, dcbi, dst, icbi: no host cache exists. */
+            if (record)
+                return PPU_STEP_UNSUPPORTED;
+            state->pc += 4;
+            return PPU_STEP_OK;
+        }
+        if (xo == 1014u) { /* dcbz: clear the Cell PPE's 128-byte cache block */
+            if (record || rt != 0)
+                return PPU_STEP_UNSUPPORTED;
+            const uint64_t indexed_base = ra == 0 ? 0 : state->gpr[ra];
+            if (indexed_base > UINT64_MAX - state->gpr[rb])
+                return PPU_STEP_MEMORY_FAULT;
+            const uint64_t block_address = (indexed_base + state->gpr[rb]) & ~127ull;
+            size_t memory_offset;
+            if (!memory_range_offset(state, block_address, 128u, &memory_offset))
+                return PPU_STEP_MEMORY_FAULT;
+            for (size_t i = 0; i < 128u; ++i)
+                state->memory[memory_offset + i] = 0;
+            state->pc += 4;
+            return PPU_STEP_OK;
+        }
         if (xo == 20u) { /* lwarx: atomic word load with reservation */
             if (record)
                 return PPU_STEP_UNSUPPORTED;
