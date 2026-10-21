@@ -6,7 +6,7 @@
 param(
     [string]$Iso    = 'C:\Games\God_Of_War_3\God of War III (Europe) (En,Fr,De,Es,It,Nl,Pt,Pl,Ru).iso',
     [string]$Rpcs3  = 'C:\Games\Emulador',
-    [int]$Seconds   = 120
+    [int]$Seconds   = 180
 )
 $ErrorActionPreference = 'Stop'
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -47,13 +47,23 @@ $env:PS3_HDD1_ROOT = $Hdd1
 if (Test-Path (Join-Path $Rpcs3 'dev_flash')) { $env:PS3_DEV_FLASH = Join-Path $Rpcs3 'dev_flash' }
 if (Test-Path (Join-Path $Rpcs3 'avcodec-63.dll')) { $env:PATH = "$Rpcs3;$env:PATH" }   # FFmpeg de RPCS3
 $env:PS3_VERBOSE = '1'
+$env:PS3_SAMPLE  = '20'      # perfilador: cada 20 ms anota qué función ejecuta cada hilo
 
 # 4. Lanzar y esperar.
 $p = Start-Process -FilePath $Exe -ArgumentList "`"$Elf`"" -WorkingDirectory $Here `
      -RedirectStandardOutput $Log -RedirectStandardError "$Log.err" -PassThru
 Write-Host "Gow3Recomp en marcha (PID $($p.Id)). Disco $Disc. Registro: $Log"
+Write-Host ''
+Write-Host 'Teclado = mando: Z = X (cruz), X = circulo, A = cuadrado, S = triangulo,'
+Write-Host '                 flechas = cruceta, Enter = START, Tab = SELECT, Q/W = L1/R1.'
+Write-Host '(Haz clic en la ventana del juego para que reciba las teclas.)'
+Write-Host ''
 Write-Host "Se cerrará solo en $Seconds s (puedes cerrarlo antes)."
-if (-not $p.WaitForExit($Seconds * 1000)) { Stop-Process -Id $p.Id -Force; $estado = "cerrado tras $Seconds s" }
-else { $estado = "terminó solo, código $($p.ExitCode)" }
+if (-not $p.WaitForExit($Seconds * 1000)) {
+    Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    if (-not $p.HasExited) { & taskkill.exe /PID $p.Id /T /F | Out-Null }
+    $estado = "cerrado tras $Seconds s"
+} else { $estado = "terminó solo, código $($p.ExitCode)" }
 "$estado | disco=$Disc | $(Get-Date -Format s)" | Out-File (Join-Path $Logs "arranque_$Stamp.txt") -Encoding utf8
 Write-Host "Listo: $estado."

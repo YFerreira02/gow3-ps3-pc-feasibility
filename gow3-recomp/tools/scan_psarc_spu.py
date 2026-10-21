@@ -27,9 +27,9 @@ for path in a.psarc:
         # Wws job module: word5 == C0DEC0DE, word0 is an ila (opcode 0x21 in top 7 bits -> 0x42..0x43)
         j = d.find(b'\xC0\xDE\xC0\xDE')
         while j >= 0:
-            s = j - 0x14
+            s = j - 0x20          # 4 ila | entry @0x10 | size @0x14 | 0 | 0 | C0DEC0DE @0x20
             if s >= 0 and (d[s] & 0xFE) == 0x42:
-                ent, size = struct.unpack('>II', d[s+4:s+12])
+                ent, size = struct.unpack('>II', d[s+0x10:s+0x18])
                 if 0 < size <= 0x40000:
                     b = d[s:s+size]; h = hashlib.sha1(b).hexdigest()[:12]
                     if ('job', h) not in seen:

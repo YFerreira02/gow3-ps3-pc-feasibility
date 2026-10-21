@@ -20,3 +20,26 @@ python3 "$KIT/tools/wrap_spu_elf.py" "$here/meta/wws_pm.bin" --base 0xA00 --entr
 python3 "$KIT/tools/build_spu_workloads.py" --images "$here/meta/spu" --lifted "$here/src/spu" \
     --out "$here/src/spu/spu_workloads.c" --register-fn gow3_spu_register_all --constructor \
     --title gow3 --relift
+
+# Módulos de trabajo Wws incrustados en el EBOOT (cabecera: 4 ila | entry @0x10 |
+# tamaño @0x14 | 0 | 0 | 0xC0DEC0DE @0x20). Se omiten los 4 que son carga útil de
+# los ELF SPU ya traducidos. 20 módulos, imágenes 200..219.
+mkdir -p "$here/meta/jobmods"
+python3 - "$ELF" "$here/meta/jobmods" <<'PY'
+import sys, struct, hashlib
+d = open(sys.argv[1], 'rb').read(); out = sys.argv[2]
+skip = {0x4a3180, 0x4b5c00, 0x4d8b00, 0x4efa80}
+st = []; j = d.find(b'\xC0\xDE\xC0\xDE')
+while j >= 0:
+    if j >= 0x20: st.append(j - 0x20)
+    j = d.find(b'\xC0\xDE\xC0\xDE', j + 1)
+st.sort()
+for i, s in enumerate(st):
+    va = s + 0x10000 if s < 0x4f0000 else s - 0x4f0000 + 0x500000
+    if va in skip: continue
+    ent, size = struct.unpack('>II', d[s + 0x10:s + 0x18])
+    b = d[s:s + min(size, (st[i + 1] if i + 1 < len(st) else len(d)) - s)]
+    open(f'{out}/jobmod_{hashlib.sha1(b).hexdigest()[:12]}_e{ent:04X}.bin', 'wb').write(b)
+PY
+python3 "$KIT/tools/lift_jobmods.py" --jobmods "$here/meta/jobmods" --out "$here/src/spu" \
+    --register "$here/src/spu/jobmods_register.c" --symbol-prefix gow3
