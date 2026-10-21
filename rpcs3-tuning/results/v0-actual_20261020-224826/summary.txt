@@ -1,0 +1,9 @@
+profile=v0-actual
+date=20261020-224826
+samples=78
+fps_avg=12.29
+fps_p5=8.91
+fps_min=6.92
+fps_max=16.72
+cpu_avg_pct=96.3
+free_ram_min_mb=2167

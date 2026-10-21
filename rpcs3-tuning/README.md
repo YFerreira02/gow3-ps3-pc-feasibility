@@ -15,7 +15,7 @@ Copia esta carpeta en `C:\Games\GoW3_Tuning` y cierra RPCS3 antes de usarla.
 | `Jugar GoW3.bat` | Abre el juego con el mejor perfil hasta ahora (`best.txt`), sin medir. |
 | `Restaurar config original.bat` | Devuelve la configuración del juego a como estaba antes de la primera prueba. |
 
-Los resultados quedan en `results\<perfil>_<fecha>\`: `summary.txt` (FPS promedio, 5 % más bajo, mínimo, CPU y RAM libre), `samples.csv` (una muestra por segundo) y una copia de `RPCS3.log`.
+Los resultados quedan en el PC en `results\<perfil>_<fecha>\` (en GitHub se suben solo `summary.txt` y `samples.csv`): `summary.txt` (FPS promedio, 5 % más bajo, mínimo, CPU y RAM libre), `samples.csv` (una muestra por segundo) y una copia de `RPCS3.log`.
 
 **Escena de prueba:** siempre la misma, por ejemplo cargar la misma partida guardada y jugar el mismo tramo durante los 120 s. Si cambia la escena, los números no son comparables.
 
@@ -36,4 +36,4 @@ Candidatos para las siguientes versiones, según lo que digan las mediciones: pl
 
 | Versión | FPS promedio | FPS 5 % bajo | CPU media | Nota |
 |---|---|---|---|---|
-| — | — | — | — | Sin mediciones todavía |
+| v0-actual | 12.3 | 8.9 | 96 % | 2026-10-20. CPU al tope todo el tiempo: el límite es la CPU, no la GPU. Mínimo 6.9 FPS, RAM libre mínima 2.2 GB. |
