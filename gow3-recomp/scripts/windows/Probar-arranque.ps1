@@ -7,7 +7,8 @@ param(
     [string]$Iso    = 'C:\Games\God_Of_War_3\God of War III (Europe) (En,Fr,De,Es,It,Nl,Pt,Pl,Ru).iso',
     [string]$Rpcs3  = 'C:\Games\Emulador',
     [int]$Seconds   = 180,
-    [string]$Tag    = ''
+    [string]$Tag    = '',
+    [int]$ParkWaitMs = 30000
 )
 $ErrorActionPreference = 'Stop'
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -49,6 +50,10 @@ if (Test-Path (Join-Path $Rpcs3 'dev_flash')) { $env:PS3_DEV_FLASH = Join-Path $
 if (Test-Path (Join-Path $Rpcs3 'avcodec-63.dll')) { $env:PATH = "$Rpcs3;$env:PATH" }   # FFmpeg de RPCS3
 $env:PS3_VERBOSE = '1'
 $env:PS3_SAMPLE  = '20'      # perfilador: cada 20 ms anota qué función ejecuta cada hilo
+# Cuánto espera el runtime a que el juego libere la GPU aparcada antes de saltar
+# adelante (por defecto del juego: 2000 ms). Más largo = distinguir 'lento' de 'nunca'.
+$env:GCM_PARK_WAIT_MS = "$ParkWaitMs"
+$env:GCM_HOLD_LOG = '1'      # registra cada vez que la GPU sale de un aparcamiento
 
 # 4. Lanzar y esperar.
 $p = Start-Process -FilePath $Exe -ArgumentList "`"$Elf`"" -WorkingDirectory $Here `
@@ -66,5 +71,5 @@ if (-not $p.WaitForExit($Seconds * 1000)) {
     if (-not $p.HasExited) { & taskkill.exe /PID $p.Id /T /F | Out-Null }
     $estado = "cerrado tras $Seconds s"
 } else { $estado = "terminó solo, código $($p.ExitCode)" }
-"$estado | disco=$Disc | tag=$Tag | SPU_OVL_OFF=$env:SPU_OVL_OFF | $(Get-Date -Format s)" | Out-File (Join-Path $Logs "arranque_$Stamp.txt") -Encoding utf8
+"$estado | disco=$Disc | tag=$Tag | SPU_OVL_OFF=$env:SPU_OVL_OFF | park=$ParkWaitMs | $(Get-Date -Format s)" | Out-File (Join-Path $Logs "arranque_$Stamp.txt") -Encoding utf8
 Write-Host "Listo: $estado."
