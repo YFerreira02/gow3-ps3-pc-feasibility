@@ -1,0 +1,13 @@
+profile=v4-sched-alt
+date=20261020-231054
+samples=81
+fps_avg=20.79
+fps_p5=9.49
+fps_min=8.54
+fps_max=65.84
+cpu_avg_pct=92.3
+free_ram_min_mb=2079
+gameplay_samples=62
+gameplay_fps_avg=13.08
+gameplay_fps_median=12.23
+gameplay_fps_p5=9.01

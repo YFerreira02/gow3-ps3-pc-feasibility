@@ -15,7 +15,7 @@ Copia esta carpeta en `C:\Games\GoW3_Tuning` y cierra RPCS3 antes de usarla.
 | `Jugar GoW3.bat` | Abre el juego con el mejor perfil hasta ahora (`best.txt`), sin medir. |
 | `Restaurar config original.bat` | Devuelve la configuración del juego a como estaba antes de la primera prueba. |
 
-Los resultados quedan en el PC en `results\<perfil>_<fecha>\` (en GitHub se suben solo `summary.txt` y `samples.csv`): `summary.txt` (FPS promedio, 5 % más bajo, mínimo, CPU y RAM libre), `samples.csv` (una muestra por segundo) y una copia de `RPCS3.log`.
+Los resultados quedan en el PC en `results\<perfil>_<fecha>\` (en GitHub se suben solo `summary.txt` y `samples.csv`): `summary.txt` (FPS promedio, FPS de juego real, 5 % más bajo, CPU, velocidad real de la CPU en MHz y RAM libre), `samples.csv` (una muestra por segundo), `system.txt` (cargador, plan de energía y programas que más memoria usan) y una copia de `RPCS3.log`.
 
 **Escena de prueba:** siempre la misma, por ejemplo cargar la misma partida guardada y jugar el mismo tramo durante los 120 s. Si cambia la escena, los números no son comparables.
 
@@ -46,6 +46,7 @@ Las cifras usan solo los segundos de **juego real**: CPU al 85 % o más y menos 
 | v1-spu-mega | 6.8 | 7.0 | 1.7 | 36 de 40 | **No válida.** Cambiar el tamaño de bloque SPU obliga a recompilar la caché SPU, y esta sesión pasó compilando. v2 incluye el mismo cambio y no muestra el problema. |
 | v2-spu-loop | 12.2 | 13.5 | 9.2 | 62 de 84 | Igual o apenas mejor que v0, dentro del margen de ruido. |
 | v3-720p | 12.6 | 13.3 | 9.5 | 35 de 81 | **1280x720 sin costo medible** frente a 720x480. Gran parte de la sesión fue en menús. Pasa a ser el perfil para jugar (`best.txt`). |
+| v4-sched-alt | 12.2 | 13.1 | 9.0 | 62 de 81 | Sin cambio frente a v3: el planificador de hilos no es el problema. |
 
 **Conclusión hasta ahora:** el juego va a unos 12–13 FPS en juego real con cualquiera de estos perfiles. Como la GPU no es el límite, la resolución original no cuesta FPS. Las siguientes pruebas (v4–v7) parten de v3 y cambian una sola cosa cada una, para atacar la CPU.
 

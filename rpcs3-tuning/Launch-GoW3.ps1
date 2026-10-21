@@ -115,7 +115,28 @@ $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $runDir = Join-Path $resultsDir "$Perfil`_$stamp"
 New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 $csv = Join-Path $runDir 'samples.csv'
-'elapsed_s,fps,cpu_pct,free_ram_mb' | Set-Content -LiteralPath $csv -Encoding ASCII
+'elapsed_s,fps,cpu_pct,free_ram_mb,cpu_mhz' | Set-Content -LiteralPath $csv -Encoding ASCII
+
+# Estado del equipo al empezar: cargador, plan de energia y programas que mas memoria usan.
+$systemFile = Join-Path $runDir 'system.txt'
+try {
+    $battery = Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue | Select-Object -First 1
+    $onAc = if ($battery) { if ($battery.BatteryStatus -eq 2) { 'si' } else { "no (BatteryStatus=$($battery.BatteryStatus))" } } else { 'sin bateria detectada' }
+    $cpuInfo = Get-CimInstance Win32_Processor | Select-Object -First 1
+    $plan = (powercfg /getactivescheme) -join ' '
+    $topMem = Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 12 |
+        ForEach-Object { '{0,-28} {1,7} MB' -f $_.ProcessName, [int]($_.WorkingSet64 / 1MB) }
+    @(
+        "cargador_conectado=$onAc"
+        "cpu=$($cpuInfo.Name)"
+        "cpu_max_mhz_nominal=$($cpuInfo.MaxClockSpeed)"
+        "plan_energia=$plan"
+        ''
+        'Programas con mas memoria al iniciar la prueba:'
+    ) + $topMem | Set-Content -LiteralPath $systemFile -Encoding UTF8
+} catch {
+    "No se pudo leer el estado del equipo: $_" | Set-Content -LiteralPath $systemFile -Encoding UTF8
+}
 
 Write-Host ''
 if ($AutoStart -ge 0) {
@@ -130,6 +151,7 @@ $measuring = $false
 $done = $false
 $start = $null
 $lastCpu = ''
+$lastMhz = ''
 $lastRam = ''
 $tick = 0
 $keyWasDown = $false
@@ -155,13 +177,16 @@ while (-not $process.HasExited) {
             try {
                 $lastCpu = (Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'").PercentProcessorTime
                 $lastRam = [int]((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1024)
+                # Velocidad real de la CPU: frecuencia base x % de rendimiento (incluye turbo y recortes por calor o consumo).
+                $procInfo = Get-CimInstance Win32_PerfFormattedData_Counters_ProcessorInformation -Filter "Name='_Total'"
+                $lastMhz = [int]($procInfo.ProcessorFrequency * $procInfo.PercentProcessorPerformance / 100)
             } catch { }
         }
         $title = [Gow3Win]::FpsTitle([uint32]$process.Id)
         if ($title -and $title -match '^FPS:\s*([0-9]+(?:[.,][0-9]+)?)') {
             $fps = [double]::Parse(($Matches[1] -replace ',', '.'), $culture)
             $samples.Add($fps)
-            ('{0},{1},{2},{3}' -f $elapsed.ToString('0.0', $culture), $fps.ToString('0.00', $culture), $lastCpu, $lastRam) |
+            ('{0},{1},{2},{3},{4}' -f $elapsed.ToString('0.0', $culture), $fps.ToString('0.00', $culture), $lastCpu, $lastRam, $lastMhz) |
                 Add-Content -LiteralPath $csv -Encoding ASCII
         }
         if ($elapsed -ge $Seconds -or ($pressed -and $elapsed -gt 2)) {
@@ -195,6 +220,13 @@ if ($samples.Count -gt 0) {
     $ramVals = $rows | Where-Object { $_.free_ram_mb -ne '' } | ForEach-Object { [double]$_.free_ram_mb }
     $cpuAvg = if ($cpuVals) { ($cpuVals | Measure-Object -Average).Average } else { 0 }
     $ramMin = if ($ramVals) { ($ramVals | Measure-Object -Minimum).Minimum } else { 0 }
+    $mhzVals = @($rows | Where-Object { $_.cpu_mhz -and $_.cpu_mhz -ne '' -and [double]$_.cpu_mhz -gt 0 } | ForEach-Object { [double]$_.cpu_mhz })
+    $mhzLines = @()
+    if ($mhzVals.Count -gt 0) {
+        $mhzLines += ('cpu_mhz_avg={0}' -f [int](($mhzVals | Measure-Object -Average).Average))
+        $mhzLines += ('cpu_mhz_min={0}' -f [int](($mhzVals | Measure-Object -Minimum).Minimum))
+        $mhzLines += ('cpu_mhz_max={0}' -f [int](($mhzVals | Measure-Object -Maximum).Maximum))
+    }
     # Muestras de juego real: CPU al tope (>= 85 %) y menos de 29.5 FPS.
     # Excluye menus, pantallas de carga (meseta de 30.6) y momentos a 60 FPS que inflan el promedio.
     $gameplay = @($rows | Where-Object { $_.cpu_pct -ne '' -and [double]$_.cpu_pct -ge 85 -and [double]$_.fps -lt 29.5 } |
@@ -216,6 +248,7 @@ if ($samples.Count -gt 0) {
         ('cpu_avg_pct={0}' -f ([double]$cpuAvg).ToString('0.0', $culture))
         ('free_ram_min_mb={0}' -f $ramMin)
         $gameLines
+        $mhzLines
     ) | Set-Content -LiteralPath $summaryFile -Encoding ASCII
     Write-Host ''
     Get-Content -LiteralPath $summaryFile | Write-Host
