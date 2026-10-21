@@ -1,0 +1,6 @@
+=== EBOOT.elf
+  machine=21(21=PPC64)  exec=5021KB  ~frames=7414  bl-sites=32365
+  SPU markers (2): cellSpurs, cellSpursGetInfoFailed
+  NP/online (2): sceNp, sceNpTrophy
+  key libs: cellAudio, cellGame, cellGcmSys, cellSysmodule, cellSysutil, sysPrxForUser
+

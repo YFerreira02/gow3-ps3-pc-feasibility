@@ -1,0 +1,15 @@
+Importaciones: 184, presentes en ps3recomp: 166 (90%)
+
+cellSpurs               34/44  faltan: cellSpursDestroyTaskset2, 0x58D58FCF, cellSpursTryJoinTask2, _cellSpursTaskAttribute2Initialize, _cellSpursWorkloadFlagReceiver, cellSpursJoinTask2, cellSpursGetWorkloadFlag, cellSpursCreateTask2, cellSpursLFQueueDetachLv2EventQueue, _cellSpursLFQueuePushBody
+sysPrxForUser           24/30  faltan: sys_prx_load_module, sys_prx_register_library, sys_game_process_exitspawn2, sys_prx_load_module_on_memcontainer_by_fd, sys_prx_load_module_on_memcontainer, sys_prx_load_module_by_fd
+cellGcmSys              27/28  faltan: _cellGcmFunc15
+cellSysutil             18/18  
+sys_fs                  17/17  
+sceNpTrophy             10/11  faltan: sceNpTrophyAbortHandle
+libvdec                  8/8   
+sys_io                   7/7   
+cellAudio                7/7   
+cellGame                 5/5   
+sceNp                    4/4   
+cellSysmodule            4/4   
+cellSysutilAvconfExt     1/1   

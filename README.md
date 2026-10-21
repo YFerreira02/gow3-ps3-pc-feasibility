@@ -4,7 +4,13 @@
 **Target / Objetivo:** Windows 11 x64, Vulkan 1.2 minimum, Ryzen 5 3500U + Vega 8, 10 GB RAM.
 **Goal / Meta:** investigate 50–60 FPS with adjustable resolution; not yet demonstrated.
 
-## Current track (2026-10-20) / Ruta actual
+## Current track (2026-10-21) / Ruta actual: static recompilation
+
+The project now follows [Ascension](https://github.com/arnaldolima1/gow-ascension-pc)'s method: the PS3 executable is recompiled to C++ on [ps3recomp](https://github.com/sp00nznet/ps3recomp). Everything is in [`gow3-recomp/`](gow3-recomp/). The owner's EBOOT (BCES00510 v1.00) has been decrypted locally; triage: 5 MB of PPU code, 184 firmware imports (90% already in ps3recomp), 8 embedded SPU programs plus SPURS tasksets and job chains ([TRIAGE.md](gow3-recomp/TRIAGE.md)). No game data is committed. RPCS3 (`rpcs3-tuning/`) is still how the game is played meanwhile.
+
+El proyecto sigue ahora el método de Ascension: recompilar el ejecutable de PS3 a C++ sobre ps3recomp. Todo está en [`gow3-recomp/`](gow3-recomp/). El EBOOT del dueño (BCES00510 v1.00) ya se descifró en local; el triaje está en [TRIAGE.md](gow3-recomp/TRIAGE.md). No se sube ningún dato del juego. Mientras tanto, se sigue jugando con RPCS3 (`rpcs3-tuning/`).
+
+## Previous track (2026-10-20) / Ruta anterior
 
 The owner chose to play the PS3 edition through RPCS3 and tune it for this laptop. [`rpcs3-tuning/`](rpcs3-tuning/) holds a launcher, versioned per-game profiles, and FPS measurements. The standalone runtime below is paused as research: its retail executable is encrypted and this project does not decrypt it.
 

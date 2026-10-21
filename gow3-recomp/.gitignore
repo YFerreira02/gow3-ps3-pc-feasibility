@@ -1,0 +1,13 @@
+# Nunca subir datos del juego ni lo generado a partir de ellos
+work/
+*.elf
+*.ELF
+*.self
+*.sprx
+*.BIN
+*.psarc
+*.PSARC
+src/recomp/
+src/spu/
+build/
+.env
