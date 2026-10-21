@@ -28,8 +28,9 @@ Se generan con `python3 make_profiles.py` a partir de `profiles/base_BCES00510.y
 | v0-actual | Ninguno: es la línea base. |
 | v1-spu-mega | `SPU Block Size`: Safe → Mega |
 | v2-spu-loop | `SPU loop detection`: activado |
+| v3-720p | Resolución 720x480 → 1280x720 (la original de PS3) |
 
-Candidatos para las siguientes versiones, según lo que digan las mediciones: planificador de hilos de RPCS3, RSX multihilo apagado, número de hilos SPURS, GPU Radeon 530 frente a Vega 8, y resolución 1280x720 con escala reducida.
+Candidatos para las siguientes versiones, según lo que digan las mediciones: planificador de hilos de RPCS3, RSX multihilo apagado, número de hilos SPURS, GPU Radeon 530 frente a Vega 8, y recuperar efectos visuales (bloom, niebla, corrección de color) manteniendo apagado el MLAA de las SPU, que es el que más CPU consume.
 
 ## Resultados
 

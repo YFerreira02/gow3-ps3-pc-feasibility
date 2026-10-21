@@ -30,6 +30,11 @@ PROFILES = {
         "v1-spu-mega",
         {"Core/SPU loop detection": "true"},
     ),
+    "v3-720p": (
+        "v2 + resolucion original de PS3 1280x720 (antes 720x480). Mide cuanto cuesta la calidad.",
+        "v2-spu-loop",
+        {"Video/Resolution": "1280x720"},
+    ),
 }
 
 
