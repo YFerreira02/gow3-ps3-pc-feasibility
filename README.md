@@ -19,7 +19,7 @@ Aquí “nativo” significa un programa de Windows con interfaz y renderer prop
 ## Implemented so far / Implementado hasta ahora
 
 - Windows Vulkan probes: the Vega 8 exposes Vulkan 1.2; synthetic triangle and offscreen display paths have been exercised. These are not game benchmarks.
-- Asset-free PPU interpreter prototype: 251 synthetic checks cover selected PPU operations (including VMX byte/halfword/word arithmetic, logical operations and aligned vector loads/stores, initial atomic `lwarx`/`stwcx.`, cache-block zero, memory barriers, and a generic syscall callback hook), bounded ELF loading, ISO9660 EBOOT lookup, and bounded SELF/ELF parsing. The callback is infrastructure only; no PS3 syscall services are implemented. Atomic reservation handling is currently a same-word compare-and-swap approximation; full Cell reservation granule and multi-thread semantics are not implemented. A separate plain-segment loader accepts only unencrypted, uncompressed PT_LOAD segments and refuses encrypted segments before changing guest memory. It does not decrypt or execute game data.
+- Asset-free PPU interpreter prototype: 288 synthetic checks cover selected PPU operations (including VMX integer and single-precision arithmetic, `vperm`, `vsldoi`, `vsel`, splats, merges, word shifts, integer compares, `vaddfp`/`vsubfp`/`vmaddfp`/`vnmsubfp`/`vmaxfp`/`vminfp`, float compares, and `lvsl`/`lvsr`, logical operations and aligned vector loads/stores, initial atomic `lwarx`/`stwcx.`, cache-block zero, memory barriers, and a generic syscall callback hook), bounded ELF loading, ISO9660 EBOOT lookup, and bounded SELF/ELF parsing. The callback is infrastructure only; no PS3 syscall services are implemented. Atomic reservation handling is currently a same-word compare-and-swap approximation; full Cell reservation granule and multi-thread semantics are not implemented. A separate plain-segment loader accepts only unencrypted, uncompressed PT_LOAD segments and refuses encrypted segments before changing guest memory. It does not decrypt or execute game data.
 - A read-only scan of the user's ISO located `EBOOT.BIN` at byte offset 6,750,208 (5,465,224 bytes). Its SELF metadata exposes a PPC64 ELF entry at `0x50ddc0`, eight segment descriptors, and virtual memory ranges at `0x10000` and `0x500000`; payload encryption markers are set on the two nonempty program segments. This identifies the loader blocker; it does not reach PPU code or a menu.
 - Game data and firmware are not in the repository. The ISO is only memory-mapped read-only by the diagnostic host; no second copy or extracted file is created.
 
@@ -42,6 +42,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Build-PpuPrototype.p
 ```
 
 This uses the local Zig compiler under ignored `work/` to build a native Windows test executable. It runs synthetic tests only and never opens game files.
+
+## Run the PPU checks on Linux / CI
+
+```bash
+bash tools/run-ppu-tests.sh
+```
+
+Builds the same asset-free harness with a small Win32 shim (`tools/linux_test_shim.c`) and also checks that the Windows `-nostdlib` objects do not pull in C-runtime helpers. GitHub Actions runs it on every push (`.github/workflows/ppu-tests.yml`).
 
 ## Build the standalone host executable
 

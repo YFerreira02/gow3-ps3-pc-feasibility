@@ -296,6 +296,258 @@ static int branch_condition(PpuState *state, uint32_t bo, uint32_t bi, int decre
     return ctr_ok && cond_ok;
 }
 
+/* ---- VMX/AltiVec helpers ------------------------------------------------
+ * Vector registers are stored as 16 bytes in guest (big-endian) element order:
+ * byte 0 is element 0. The Cell PPE VMX unit runs in non-Java mode, so
+ * single-precision denormal inputs and results are flushed to signed zero. */
+
+static uint32_t vr_word(const PpuState *state, uint32_t reg, uint32_t index)
+{
+    return read_u32_be(state->vr[reg] + index * 4u);
+}
+
+static float vmx_flush_input(float value)
+{
+    const uint32_t bits = float_bits(value);
+    if ((bits & 0x7f800000u) == 0 && (bits & 0x007fffffu) != 0)
+        return float_from_bits(bits & 0x80000000u);
+    return value;
+}
+
+static uint32_t vmx_flush_result(float value)
+{
+    uint32_t bits = float_bits(value);
+    if ((bits & 0x7f800000u) == 0)
+        return bits & 0x80000000u;
+    if ((bits & 0x7f800000u) == 0x7f800000u && (bits & 0x007fffffu) != 0)
+        bits |= 0x00400000u; /* results are quiet NaNs */
+    return bits;
+}
+
+static int vmx_is_nan(float value)
+{
+    const uint32_t bits = float_bits(value);
+    return (bits & 0x7f800000u) == 0x7f800000u && (bits & 0x007fffffu) != 0;
+}
+
+static float vmx_lane_float(const PpuState *state, uint32_t reg, uint32_t index)
+{
+    return vmx_flush_input(float_from_bits(vr_word(state, reg, index)));
+}
+
+static void vmx_set_cr6(PpuState *state, int all_true, int all_false)
+{
+    const uint32_t field = (all_true ? 8u : 0u) | (all_false ? 2u : 0u);
+    const uint32_t shift = (7u - 6u) * 4u;
+    state->cr = (state->cr & ~(0xfu << shift)) | (field << shift);
+}
+
+static PpuStepResult execute_vmx(PpuState *state, uint32_t insn)
+{
+    const uint32_t vd = (insn >> 21) & 31u;
+    const uint32_t va = (insn >> 16) & 31u;
+    const uint32_t vb = (insn >> 11) & 31u;
+    const uint32_t vc = (insn >> 6) & 31u;
+    const uint32_t va_xo = insn & 0x3fu;
+    uint8_t out[16];
+
+    /* VA-form instructions use a 6-bit extended opcode and a fourth register. */
+    if (va_xo >= 42u && va_xo <= 47u && va_xo != 45u) {
+        if (va_xo == 42u) { /* vsel */
+            for (uint32_t i = 0; i < 16; ++i)
+                out[i] = (uint8_t)((state->vr[va][i] & ~state->vr[vc][i]) |
+                                   (state->vr[vb][i] & state->vr[vc][i]));
+        } else if (va_xo == 43u) { /* vperm */
+            uint8_t source[32];
+            for (uint32_t i = 0; i < 16; ++i) {
+                source[i] = state->vr[va][i];
+                source[16 + i] = state->vr[vb][i];
+            }
+            for (uint32_t i = 0; i < 16; ++i)
+                out[i] = source[state->vr[vc][i] & 31u];
+        } else if (va_xo == 44u) { /* vsldoi */
+            if ((insn & (1u << 10)) != 0)
+                return PPU_STEP_UNSUPPORTED; /* reserved bit must be zero */
+            const uint32_t shift = vc & 15u;
+            for (uint32_t i = 0; i < 16; ++i) {
+                const uint32_t index = i + shift;
+                out[i] = index < 16u ? state->vr[va][index] : state->vr[vb][index - 16u];
+            }
+        } else { /* 46 vmaddfp, 47 vnmsubfp: (A * C) +/- B */
+            for (uint32_t i = 0; i < 4; ++i) {
+                const float a = vmx_lane_float(state, va, i);
+                const float b = vmx_lane_float(state, vb, i);
+                const float c = vmx_lane_float(state, vc, i);
+                uint32_t bits;
+                if (vmx_is_nan(a) || vmx_is_nan(b) || vmx_is_nan(c)) {
+                    const float nan = vmx_is_nan(a) ? a : (vmx_is_nan(b) ? b : c);
+                    bits = float_bits(nan) | 0x00400000u;
+                } else {
+                    /* The single-precision product is exact in double precision;
+                     * the final double->float conversion can, in rare halfway
+                     * cases, differ from a true fused single rounding. */
+                    const double product = (double)a * (double)c;
+                    double value = va_xo == 46u ? product + (double)b : -(product - (double)b);
+                    bits = vmx_flush_result((float)value);
+                }
+                write_u32_be(out + i * 4u, bits);
+            }
+        }
+        for (uint32_t i = 0; i < 16; ++i)
+            state->vr[vd][i] = out[i];
+        state->pc += 4;
+        return PPU_STEP_OK;
+    }
+
+    const uint32_t vxo = insn & 0x7ffu;
+    const uint32_t compare_xo = insn & 0x3ffu;
+    const int compare_record = (insn & 0x400u) != 0;
+
+    /* VXR-form compares: bit 0x400 is Rc and updates CR6. */
+    if (compare_xo == 6u || compare_xo == 70u || compare_xo == 134u ||
+        compare_xo == 198u || compare_xo == 454u || compare_xo == 710u) {
+        int all_true = 1, all_false = 1;
+        if (compare_xo == 6u || compare_xo == 70u || compare_xo == 134u) {
+            const uint32_t width = compare_xo == 6u ? 1u : (compare_xo == 70u ? 2u : 4u);
+            for (uint32_t i = 0; i < 16u; i += width) {
+                int equal = 1;
+                for (uint32_t j = 0; j < width; ++j)
+                    equal &= state->vr[va][i + j] == state->vr[vb][i + j];
+                /* Write the lane mask with sized stores; a byte loop here is
+                 * turned into a memset call, which the -nostdlib build lacks. */
+                if (width == 1u) out[i] = equal ? 0xffu : 0u;
+                else if (width == 2u) write_u16_be(out + i, equal ? 0xffffu : 0u);
+                else write_u32_be(out + i, equal ? 0xffffffffu : 0u);
+                all_true &= equal;
+                all_false &= !equal;
+            }
+        } else {
+            for (uint32_t i = 0; i < 4; ++i) {
+                const float a = vmx_lane_float(state, va, i);
+                const float b = vmx_lane_float(state, vb, i);
+                int result;
+                if (compare_xo == 198u) result = a == b;       /* vcmpeqfp */
+                else if (compare_xo == 454u) result = a >= b;  /* vcmpgefp */
+                else result = a > b;                           /* vcmpgtfp */
+                write_u32_be(out + i * 4u, result ? 0xffffffffu : 0u);
+                all_true &= result;
+                all_false &= !result;
+            }
+        }
+        for (uint32_t i = 0; i < 16; ++i)
+            state->vr[vd][i] = out[i];
+        if (compare_record)
+            vmx_set_cr6(state, all_true, all_false);
+        state->pc += 4;
+        return PPU_STEP_OK;
+    }
+
+    switch (vxo) {
+    case 0u: /* vaddubm */
+    case 1024u: /* vsububm */
+        for (uint32_t i = 0; i < 16; ++i)
+            out[i] = (uint8_t)(vxo == 0u ? state->vr[va][i] + state->vr[vb][i]
+                                         : state->vr[va][i] - state->vr[vb][i]);
+        break;
+    case 64u: /* vadduhm */
+    case 1088u: /* vsubuhm */
+        for (uint32_t i = 0; i < 8; ++i) {
+            const uint16_t a = read_u16_be(state->vr[va] + i * 2u);
+            const uint16_t b = read_u16_be(state->vr[vb] + i * 2u);
+            write_u16_be(out + i * 2u, (uint16_t)(vxo == 64u ? a + b : a - b));
+        }
+        break;
+    case 128u: /* vadduwm */
+    case 1152u: /* vsubuwm */
+        for (uint32_t i = 0; i < 4; ++i) {
+            const uint32_t a = vr_word(state, va, i);
+            const uint32_t b = vr_word(state, vb, i);
+            write_u32_be(out + i * 4u, vxo == 128u ? a + b : a - b);
+        }
+        break;
+    case 1028u: case 1092u: case 1156u: case 1220u: case 1284u:
+        for (uint32_t i = 0; i < 16; ++i) {
+            const uint8_t a = state->vr[va][i], b = state->vr[vb][i];
+            if (vxo == 1028u) out[i] = (uint8_t)(a & b);           /* vand */
+            else if (vxo == 1092u) out[i] = (uint8_t)(a & ~b);     /* vandc */
+            else if (vxo == 1156u) out[i] = (uint8_t)(a | b);      /* vor */
+            else if (vxo == 1220u) out[i] = (uint8_t)(a ^ b);      /* vxor */
+            else out[i] = (uint8_t)~(a | b);                       /* vnor */
+        }
+        break;
+    case 524u: case 588u: case 652u: { /* vspltb, vsplth, vspltw */
+        const uint32_t width = vxo == 524u ? 1u : (vxo == 588u ? 2u : 4u);
+        const uint32_t element = va & (16u / width - 1u);
+        for (uint32_t i = 0; i < 16u; ++i)
+            out[i] = state->vr[vb][element * width + (i % width)];
+        break;
+    }
+    case 780u: case 844u: case 908u: { /* vspltisb, vspltish, vspltisw */
+        if (vb != 0)
+            return PPU_STEP_UNSUPPORTED;
+        const int32_t simm = (int32_t)(va << 27) >> 27;
+        for (uint32_t i = 0; i < 16u; ++i) {
+            if (vxo == 780u) out[i] = (uint8_t)simm;
+            else if (vxo == 844u) out[i] = (uint8_t)((uint32_t)simm >> ((i & 1u) ? 0u : 8u));
+            else out[i] = (uint8_t)((uint32_t)simm >> (24u - (i & 3u) * 8u));
+        }
+        break;
+    }
+    case 12u: case 76u: case 140u: case 268u: case 332u: case 396u: {
+        /* vmrghb/vmrghh/vmrghw and vmrglb/vmrglh/vmrglw */
+        const uint32_t width = (vxo == 12u || vxo == 268u) ? 1u
+                             : ((vxo == 76u || vxo == 332u) ? 2u : 4u);
+        const uint32_t half = vxo >= 268u ? 8u : 0u;
+        for (uint32_t pair = 0; pair < 8u / width; ++pair) {
+            for (uint32_t j = 0; j < width; ++j) {
+                out[pair * 2u * width + j] = state->vr[va][half + pair * width + j];
+                out[pair * 2u * width + width + j] = state->vr[vb][half + pair * width + j];
+            }
+        }
+        break;
+    }
+    case 388u: case 644u: case 900u: /* vslw, vsrw, vsraw */
+        for (uint32_t i = 0; i < 4; ++i) {
+            const uint32_t a = vr_word(state, va, i);
+            const uint32_t shift = vr_word(state, vb, i) & 31u;
+            uint32_t r;
+            if (vxo == 388u) r = a << shift;
+            else if (vxo == 644u) r = a >> shift;
+            else r = (uint32_t)((int32_t)a >> shift);
+            write_u32_be(out + i * 4u, r);
+        }
+        break;
+    case 10u: case 74u: case 1034u: case 1098u: /* vaddfp, vsubfp, vmaxfp, vminfp */
+        for (uint32_t i = 0; i < 4; ++i) {
+            const float a = vmx_lane_float(state, va, i);
+            const float b = vmx_lane_float(state, vb, i);
+            uint32_t bits;
+            if (vmx_is_nan(a) || vmx_is_nan(b)) {
+                bits = float_bits(vmx_is_nan(a) ? a : b) | 0x00400000u;
+            } else if (vxo == 10u) {
+                bits = vmx_flush_result(a + b);
+            } else if (vxo == 74u) {
+                bits = vmx_flush_result(a - b);
+            } else {
+                /* max(+0,-0)=+0 and min(+0,-0)=-0 per the VMX definition. */
+                if (a == b)
+                    bits = vxo == 1034u ? (float_bits(a) & float_bits(b))
+                                        : (float_bits(a) | float_bits(b));
+                else
+                    bits = float_bits(vxo == 1034u ? (a > b ? a : b) : (a < b ? a : b));
+            }
+            write_u32_be(out + i * 4u, bits);
+        }
+        break;
+    default:
+        return PPU_STEP_UNSUPPORTED;
+    }
+    for (uint32_t i = 0; i < 16; ++i)
+        state->vr[vd][i] = out[i];
+    state->pc += 4;
+    return PPU_STEP_OK;
+}
+
 PpuStepResult ppu_step(PpuState *state)
 {
     if (!state || !state->code || (state->pc & 3u) != 0 || state->pc < state->code_base ||
@@ -322,37 +574,8 @@ PpuStepResult ppu_step(PpuState *state)
     }
 
     switch (opcode) {
-    case 4: { /* selected VMX/AltiVec vector operations */
-        const uint32_t vd = rt;
-        const uint32_t va = ra;
-        const uint32_t vb = (insn >> 11) & 31u;
-        const uint32_t vxo = insn & 0x7ffu;
-        if (vxo == 0u) { /* vaddubm */
-            for (uint32_t i = 0; i < 16; ++i)
-                state->vr[vd][i] = (uint8_t)(state->vr[va][i] + state->vr[vb][i]);
-        } else if (vxo == 64u) { /* vadduhm */
-            for (uint32_t i = 0; i < 8; ++i) {
-                const uint16_t sum = (uint16_t)(read_u16_be(state->vr[va] + i * 2u) +
-                                                read_u16_be(state->vr[vb] + i * 2u));
-                write_u16_be(state->vr[vd] + i * 2u, sum);
-            }
-        } else if (vxo == 128u) { /* vadduwm */
-            for (uint32_t i = 0; i < 4; ++i)
-                write_u32_be(state->vr[vd] + i * 4u,
-                    read_u32_be(state->vr[va] + i * 4u) +
-                    read_u32_be(state->vr[vb] + i * 4u));
-        } else if (vxo == 1028u || vxo == 1156u || vxo == 1220u) {
-            for (uint32_t i = 0; i < 16; ++i) {
-                if (vxo == 1028u) state->vr[vd][i] = state->vr[va][i] & state->vr[vb][i]; /* vand */
-                else if (vxo == 1156u) state->vr[vd][i] = state->vr[va][i] | state->vr[vb][i]; /* vor */
-                else state->vr[vd][i] = state->vr[va][i] ^ state->vr[vb][i]; /* vxor */
-            }
-        } else {
-            return PPU_STEP_UNSUPPORTED;
-        }
-        state->pc += 4;
-        return PPU_STEP_OK;
-    }
+    case 4: /* selected VMX/AltiVec vector operations */
+        return execute_vmx(state, insn);
     case 10: /* cmpli */
     case 11: { /* cmpi */
         const uint32_t bf = (insn >> 23) & 7u;
@@ -681,6 +904,16 @@ PpuStepResult ppu_step(PpuState *state)
                 else
                     state->memory[memory_offset + i] = state->vr[rt][i];
             }
+            state->pc += 4;
+            return PPU_STEP_OK;
+        }
+        if (xo == 6u || xo == 38u) { /* lvsl / lvsr: permute-control vectors */
+            const uint64_t indexed_base = ra == 0 ? 0 : state->gpr[ra];
+            if (record)
+                return PPU_STEP_UNSUPPORTED;
+            const uint32_t shift = (uint32_t)((indexed_base + state->gpr[rb]) & 15u);
+            for (uint32_t i = 0; i < 16u; ++i)
+                state->vr[rt][i] = (uint8_t)(xo == 6u ? shift + i : 16u - shift + i);
             state->pc += 4;
             return PPU_STEP_OK;
         }

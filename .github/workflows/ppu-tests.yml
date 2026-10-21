@@ -1,0 +1,15 @@
+name: PPU synthetic checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  ppu-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang
+        run: sudo apt-get update && sudo apt-get install -y clang
+      - name: Build and run asset-free PPU checks
+        run: bash tools/run-ppu-tests.sh

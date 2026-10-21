@@ -47,6 +47,8 @@ static uint8_t put_iso_record(uint8_t *p, uint32_t extent, uint32_t size,
     ((uint32_t)(ra) << 16) | ((uint32_t)(rb) << 11) | ((uint32_t)(xo) << 1) | (rc))
 #define VX_FORM(vd, va, vb, xo) ((4u << 26) | ((uint32_t)(vd) << 21) | \
     ((uint32_t)(va) << 16) | ((uint32_t)(vb) << 11) | (uint32_t)(xo))
+#define VA_FORM(vd, va, vb, vc, xo) ((4u << 26) | ((uint32_t)(vd) << 21) | \
+    ((uint32_t)(va) << 16) | ((uint32_t)(vb) << 11) | ((uint32_t)(vc) << 6) | (uint32_t)(xo))
 #define ISEL_FORM(rt, ra, rb, bc) ((31u << 26) | ((uint32_t)(rt) << 21) | \
     ((uint32_t)(ra) << 16) | ((uint32_t)(rb) << 11) | ((uint32_t)(bc) << 6) | (15u << 1))
 #define ROT_FORM(op, rs, ra, sh, mb, me, rc) (((uint32_t)(op) << 26) | \
@@ -97,6 +99,193 @@ static PpuStepResult test_syscall_handler(PpuState *state, void *context)
     ++*calls;
     state->gpr[3] = 0;
     return PPU_STEP_OK;
+}
+
+static void set_vr_words(PpuState *state, uint32_t reg, uint32_t w0, uint32_t w1,
+                         uint32_t w2, uint32_t w3)
+{
+    const uint32_t words[4] = { w0, w1, w2, w3 };
+    for (uint32_t i = 0; i < 4; ++i) {
+        state->vr[reg][i * 4u] = (uint8_t)(words[i] >> 24);
+        state->vr[reg][i * 4u + 1u] = (uint8_t)(words[i] >> 16);
+        state->vr[reg][i * 4u + 2u] = (uint8_t)(words[i] >> 8);
+        state->vr[reg][i * 4u + 3u] = (uint8_t)words[i];
+    }
+}
+
+static uint32_t get_vr_word(const PpuState *state, uint32_t reg, uint32_t index)
+{
+    const uint8_t *p = state->vr[reg] + index * 4u;
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
+}
+
+static int vr_words_are(const PpuState *state, uint32_t reg, uint32_t w0, uint32_t w1,
+                        uint32_t w2, uint32_t w3)
+{
+    return get_vr_word(state, reg, 0) == w0 && get_vr_word(state, reg, 1) == w1 &&
+           get_vr_word(state, reg, 2) == w2 && get_vr_word(state, reg, 3) == w3;
+}
+
+static int run_one(PpuState *state, uint8_t *code, uint32_t insn)
+{
+    EMIT_BE(code, 0, insn);
+    state->code = code;
+    state->code_size = 4;
+    state->code_base = 0;
+    state->pc = 0;
+    return ppu_step(state) == PPU_STEP_OK && state->pc == 4;
+}
+
+__attribute__((noinline)) static int run_vmx_extended_checks(void)
+{
+    static uint8_t code[4];
+    static PpuState state; /* static keeps entry's frame below the stack-probe threshold */
+    int ok = 1;
+    ppu_state_init(&state, code, sizeof(code), 0);
+
+    set_vr_words(&state, 1, 0x00010203u, 0x04050607u, 0x08090a0bu, 0x0c0d0e0fu);
+    set_vr_words(&state, 2, 0x10111213u, 0x14151617u, 0x18191a1bu, 0x1c1d1e1fu);
+    set_vr_words(&state, 3, 0x1f001e01u, 0x02100311u, 0x00000000u, 0xffe0bf7fu);
+    ok &= check(run_one(&state, code, VA_FORM(4, 1, 2, 3, 43)) &&
+                vr_words_are(&state, 4, 0x1f001e01u, 0x02100311u, 0x00000000u, 0x1f001f1fu),
+                "vperm selects bytes from the 32-byte A||B pair using the low five control bits");
+    ok &= check(run_one(&state, code, VA_FORM(5, 1, 2, 4, 44)) &&
+                vr_words_are(&state, 5, 0x04050607u, 0x08090a0bu, 0x0c0d0e0fu, 0x10111213u),
+                "vsldoi shifts the A||B pair left by SH bytes");
+    ok &= check(run_one(&state, code, VA_FORM(5, 1, 2, 0, 44)) &&
+                vr_words_are(&state, 5, 0x00010203u, 0x04050607u, 0x08090a0bu, 0x0c0d0e0fu),
+                "vsldoi with SH=0 returns A");
+    set_vr_words(&state, 3, 0xff00ff00u, 0x00000000u, 0xffffffffu, 0x0f0f0f0fu);
+    ok &= check(run_one(&state, code, VA_FORM(6, 1, 2, 3, 42)) &&
+                vr_words_are(&state, 6, 0x10011203u, 0x04050607u, 0x18191a1bu, 0x0c0d0e0fu),
+                "vsel picks B where the mask bit is set and A elsewhere");
+
+    ok &= check(run_one(&state, code, VX_FORM(7, 2, 1, 1024)) &&
+                vr_words_are(&state, 7, 0x10101010u, 0x10101010u, 0x10101010u, 0x10101010u),
+                "vsububm subtracts byte lanes modulo 256");
+    set_vr_words(&state, 8, 0x00000001u, 0x00010000u, 0x80000000u, 0x00000000u);
+    set_vr_words(&state, 9, 0x00000002u, 0x00020001u, 0x00000001u, 0x00000001u);
+    ok &= check(run_one(&state, code, VX_FORM(7, 8, 9, 1152)) &&
+                vr_words_are(&state, 7, 0xffffffffu, 0xfffeffffu, 0x7fffffffu, 0xffffffffu),
+                "vsubuwm subtracts word lanes modulo 2^32");
+    ok &= check(run_one(&state, code, VX_FORM(7, 8, 9, 1088)) &&
+                vr_words_are(&state, 7, 0x0000ffffu, 0xffffffffu, 0x8000ffffu, 0x0000ffffu),
+                "vsubuhm subtracts halfword lanes modulo 2^16");
+    set_vr_words(&state, 10, 0xff00ff00u, 0x12345678u, 0u, 0xffffffffu);
+    set_vr_words(&state, 11, 0x0ff00ff0u, 0xffffffffu, 0u, 0x0000ffffu);
+    ok &= check(run_one(&state, code, VX_FORM(7, 10, 11, 1092)) &&
+                vr_words_are(&state, 7, 0xf000f000u, 0u, 0u, 0xffff0000u),
+                "vandc computes A AND NOT B");
+    ok &= check(run_one(&state, code, VX_FORM(7, 10, 11, 1284)) &&
+                vr_words_are(&state, 7, 0x000f000fu, 0u, 0xffffffffu, 0u),
+                "vnor computes NOT (A OR B)");
+
+    ok &= check(run_one(&state, code, VX_FORM(7, 13, 1, 524)) &&
+                vr_words_are(&state, 7, 0x0d0d0d0du, 0x0d0d0d0du, 0x0d0d0d0du, 0x0d0d0d0du),
+                "vspltb replicates the selected byte element");
+    ok &= check(run_one(&state, code, VX_FORM(7, 5, 1, 588)) &&
+                vr_words_are(&state, 7, 0x0a0b0a0bu, 0x0a0b0a0bu, 0x0a0b0a0bu, 0x0a0b0a0bu),
+                "vsplth replicates the selected halfword element");
+    ok &= check(run_one(&state, code, VX_FORM(7, 2, 1, 652)) &&
+                vr_words_are(&state, 7, 0x08090a0bu, 0x08090a0bu, 0x08090a0bu, 0x08090a0bu),
+                "vspltw replicates the selected word element");
+    ok &= check(run_one(&state, code, VX_FORM(7, 0x1f, 0, 780)) &&
+                vr_words_are(&state, 7, 0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu),
+                "vspltisb sign-extends the 5-bit immediate into bytes");
+    ok &= check(run_one(&state, code, VX_FORM(7, 0x10, 0, 844)) &&
+                vr_words_are(&state, 7, 0xfff0fff0u, 0xfff0fff0u, 0xfff0fff0u, 0xfff0fff0u),
+                "vspltish sign-extends -16 into halfwords");
+    ok &= check(run_one(&state, code, VX_FORM(7, 0x0f, 0, 908)) &&
+                vr_words_are(&state, 7, 15u, 15u, 15u, 15u),
+                "vspltisw writes +15 into each word");
+    EMIT_BE(code, 0, VX_FORM(7, 1, 3, 908));
+    state.pc = 0;
+    ok &= check(ppu_step(&state) == PPU_STEP_UNSUPPORTED,
+                "vspltisw with a nonzero reserved VB field is rejected");
+
+    ok &= check(run_one(&state, code, VX_FORM(7, 1, 2, 140)) &&
+                vr_words_are(&state, 7, 0x00010203u, 0x10111213u, 0x04050607u, 0x14151617u),
+                "vmrghw interleaves the high word elements");
+    ok &= check(run_one(&state, code, VX_FORM(7, 1, 2, 396)) &&
+                vr_words_are(&state, 7, 0x08090a0bu, 0x18191a1bu, 0x0c0d0e0fu, 0x1c1d1e1fu),
+                "vmrglw interleaves the low word elements");
+    ok &= check(run_one(&state, code, VX_FORM(7, 1, 2, 12)) &&
+                vr_words_are(&state, 7, 0x00100111u, 0x02120313u, 0x04140515u, 0x06160717u),
+                "vmrghb interleaves the high byte elements");
+    ok &= check(run_one(&state, code, VX_FORM(7, 1, 2, 332)) &&
+                vr_words_are(&state, 7, 0x08091819u, 0x0a0b1a1bu, 0x0c0d1c1du, 0x0e0f1e1fu),
+                "vmrglh interleaves the low halfword elements");
+
+    set_vr_words(&state, 12, 0x80000001u, 0xffffffffu, 0x00000001u, 0x40000000u);
+    set_vr_words(&state, 13, 1u, 4u, 31u, 33u);
+    ok &= check(run_one(&state, code, VX_FORM(7, 12, 13, 388)) &&
+                vr_words_are(&state, 7, 0x00000002u, 0xfffffff0u, 0x80000000u, 0x80000000u),
+                "vslw shifts words left by the low five bits of B");
+    ok &= check(run_one(&state, code, VX_FORM(7, 12, 13, 644)) &&
+                vr_words_are(&state, 7, 0x40000000u, 0x0fffffffu, 0u, 0x20000000u),
+                "vsrw shifts words right logically");
+    ok &= check(run_one(&state, code, VX_FORM(7, 12, 13, 900)) &&
+                vr_words_are(&state, 7, 0xc0000000u, 0xffffffffu, 0u, 0x20000000u),
+                "vsraw shifts words right arithmetically");
+
+    /* 1.0, 2.0, -1.0, denormal; 2.0, 0.5, 3.0, 1.0 */
+    set_vr_words(&state, 14, 0x3f800000u, 0x40000000u, 0xbf800000u, 0x00000001u);
+    set_vr_words(&state, 15, 0x40000000u, 0x3f000000u, 0x40400000u, 0x3f800000u);
+    set_vr_words(&state, 16, 0x40400000u, 0x40000000u, 0x3f800000u, 0x40000000u);
+    ok &= check(run_one(&state, code, VX_FORM(7, 14, 15, 10)) &&
+                vr_words_are(&state, 7, 0x40400000u, 0x40200000u, 0x40000000u, 0x3f800000u),
+                "vaddfp adds single-precision lanes with denormal inputs flushed to zero");
+    ok &= check(run_one(&state, code, VX_FORM(7, 14, 15, 74)) &&
+                vr_words_are(&state, 7, 0xbf800000u, 0x3fc00000u, 0xc0800000u, 0xbf800000u),
+                "vsubfp subtracts single-precision lanes");
+    ok &= check(run_one(&state, code, VA_FORM(7, 14, 15, 16, 46)) &&
+                vr_words_are(&state, 7, 0x40a00000u, 0x40900000u, 0x40000000u, 0x3f800000u),
+                "vmaddfp computes A*C+B per lane");
+    ok &= check(run_one(&state, code, VA_FORM(7, 14, 15, 16, 47)) &&
+                vr_words_are(&state, 7, 0xbf800000u, 0xc0600000u, 0x40800000u, 0x3f800000u),
+                "vnmsubfp computes -(A*C-B) per lane");
+    ok &= check(run_one(&state, code, VX_FORM(7, 14, 15, 1034)) &&
+                vr_words_are(&state, 7, 0x40000000u, 0x40000000u, 0x40400000u, 0x3f800000u),
+                "vmaxfp selects the larger lane");
+    ok &= check(run_one(&state, code, VX_FORM(7, 14, 15, 1098)) &&
+                vr_words_are(&state, 7, 0x3f800000u, 0x3f000000u, 0xbf800000u, 0u),
+                "vminfp selects the smaller lane with denormals as zero");
+    set_vr_words(&state, 17, 0x00000080u, 0u, 0u, 0u); /* product underflows to a denormal */
+    set_vr_words(&state, 18, 0x00800000u, 0u, 0u, 0u);
+    set_vr_words(&state, 19, 0x3f000000u, 0u, 0u, 0u);
+    ok &= check(run_one(&state, code, VA_FORM(7, 18, 17, 19, 46)) &&
+                get_vr_word(&state, 7, 0) == 0u,
+                "vmaddfp flushes a denormal result to zero");
+
+    set_vr_words(&state, 20, 1u, 2u, 3u, 4u);
+    set_vr_words(&state, 21, 1u, 0u, 3u, 0u);
+    state.cr = 0xffffffffu;
+    ok &= check(run_one(&state, code, VX_FORM(7, 20, 21, 134)) &&
+                vr_words_are(&state, 7, 0xffffffffu, 0u, 0xffffffffu, 0u) && state.cr == 0xffffffffu,
+                "vcmpequw writes lane masks without touching CR");
+    ok &= check(run_one(&state, code, VX_FORM(7, 20, 21, 134 | 1024)) &&
+                ((state.cr >> 4) & 0xfu) == 0u && (state.cr & ~0xf0u) == (0xffffffffu & ~0xf0u),
+                "vcmpequw. clears CR6 all-true/all-false on a mixed result");
+    ok &= check(run_one(&state, code, VX_FORM(7, 20, 20, 134 | 1024)) &&
+                ((state.cr >> 4) & 0xfu) == 8u,
+                "vcmpequw. sets CR6 all-true when every lane matches");
+    ok &= check(run_one(&state, code, VX_FORM(7, 14, 15, 710 | 1024)) &&
+                vr_words_are(&state, 7, 0u, 0xffffffffu, 0u, 0u) && ((state.cr >> 4) & 0xfu) == 0u,
+                "vcmpgtfp. compares single-precision lanes");
+    set_vr_words(&state, 22, 0x7fc00000u, 0x7fc00000u, 0x7fc00000u, 0x7fc00000u);
+    ok &= check(run_one(&state, code, VX_FORM(7, 22, 22, 198 | 1024)) &&
+                vr_words_are(&state, 7, 0u, 0u, 0u, 0u) && ((state.cr >> 4) & 0xfu) == 2u,
+                "vcmpeqfp. treats NaN lanes as unequal and sets CR6 all-false");
+
+    state.gpr[4] = 0x1003;
+    state.gpr[5] = 0x20;
+    ok &= check(run_one(&state, code, X_FORM(7, 4, 5, 6, 0)) &&
+                vr_words_are(&state, 7, 0x03040506u, 0x0708090au, 0x0b0c0d0eu, 0x0f101112u),
+                "lvsl builds the left-shift permute control from EA bits 60-63");
+    ok &= check(run_one(&state, code, X_FORM(7, 4, 5, 38, 0)) &&
+                vr_words_are(&state, 7, 0x0d0e0f10u, 0x11121314u, 0x15161718u, 0x191a1b1cu),
+                "lvsr builds the right-shift permute control from EA bits 60-63");
+    return ok;
 }
 
 void entry(void)
@@ -1379,5 +1568,6 @@ void entry(void)
                 0x10000, self_guest, sizeof(self_guest)) == PPU_SELF_LOAD_UNSUPPORTED_COMPRESSION &&
                 self_guest[0] == 0x5a && self_guest[31] == 0x5a,
                 "compressed SELF segment refused before guest memory changes");
+    ok &= run_vmx_extended_checks();
     ExitProcess(ok ? 0u : 1u);
 }
