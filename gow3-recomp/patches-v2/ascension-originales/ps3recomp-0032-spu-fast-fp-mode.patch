@@ -1,0 +1,428 @@
+From 6081861cde729bc36f2be0b0719cf5ee780934c2 Mon Sep 17 00:00:00 2001
+From: Arnaldo Lima <arnaldolimaof@gmail.com>
+Date: Sun, 18 Oct 2026 00:47:35 -0300
+Subject: [PATCH] SPU float fast path in the SPU's own MXCSR mode;
+ SPURS_MAXCONT
+
+- spu_run_with_halt puts the thread in round-toward-zero + FTZ + DAZ while
+  SPU code runs (SPU_FAST_FP=0: off). That is single-precision SPU
+  arithmetic, so fa/fs/fm are one SSE op when no lane can leave the normal
+  range (extended range and possible overflow take the exact path). fma
+  uses the double path without TwoSum there: the double sum truncates, and
+  truncating it again to 24 bits is the SPU's one truncation. The scalar
+  fix-ups and SPU double precision (dfa/dfs/dfm/dfma family, frds, double
+  compares) switch back to the standard mode for their span.
+- test_spu_float_neon --spu-mode: every check again in that mode; bit for
+  bit against the references (8M cases) in both.
+- -frounding-math (clang-cl: /clang:) for the runtime's C sources and lifted
+  SPU code, so the compiler does not fold float ops on constants under
+  round-to-nearest.
+- SPURS_MAXCONT=<wid>=<n>: more SPUs on a workload than the title asked for
+  (diagnostic; Ascension's menu list does not gain from it).
+
+Ascension's main menu: module 0be5cb89a80c 760 -> 690 ms/s.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ CMakeLists.txt                          |   9 ++
+ libs/spurs/cellSpurs.c                  |  27 +++++-
+ runtime/spu/spu_channels.c              |  15 ++++
+ runtime/spu/spu_helpers.h               | 113 ++++++++++++++++++++----
+ runtime/spu/tests/test_spu_float_neon.c |  21 ++++-
+ templates/project/CMakeLists.txt        |  12 ++-
+ 6 files changed, 176 insertions(+), 21 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 97f43d3..bee4c8a 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -336,6 +336,15 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+     if(PS3RECOMP_HAS_MSSE41)
+         target_compile_options(ps3recomp_runtime PRIVATE -msse4.1)
+     endif()
++    # The SPU float fast path (spu_helpers.h) runs with MXCSR rounding toward
++    # zero; -frounding-math keeps the compiler from folding float ops on
++    # constants under round-to-nearest (C only: the runtime's C++ third-party
++    # tables need their double->float initialisers folded). clang-cl takes it as /clang:.
++    if(MSVC)
++        target_compile_options(ps3recomp_runtime PRIVATE $<$<COMPILE_LANGUAGE:C>:/clang:-frounding-math>)
++    else()
++        target_compile_options(ps3recomp_runtime PRIVATE $<$<COMPILE_LANGUAGE:C>:-frounding-math>)
++    endif()
+ elseif(MSVC)
+     # Real cl.exe -- clang-cl reports its id as Clang and is handled above.
+     #
+diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
+index 2b370af..2442182 100644
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -486,8 +486,33 @@ static void wkl_signal_clear(u32 ea, u32 wid)
+     u32 off = wkl_signal_off(wid);
+     ef_w16(ea + off, (u16)(vm_read16(ea + off) & ~(0x8000u >> (wid & 15))));
+ }
++/* SPURS_MAXCONT=<wid>=<n>[,<wid>=<n>...]: let more SPUs run a workload at
++ * once than the title asked for. A Wws job list keeps per-SPU progress lanes
++ * (six), so its manager is built to share a list between SPUs; a title that
++ * gave a heavy list one SPU (God of War: Ascension's main-menu list, wid 3)
++ * fitted a real SPU's speed, not a recompiled one's. 0 or unset: the title's. */
++static u32 wkl_maxcont_override(u32 wid)
++{
++    static int s_init; static u8 s_over[32];
++    if (!s_init) {
++        const char* e = getenv("SPURS_MAXCONT");
++        while (e && *e) {
++            char* end; unsigned long w = strtoul(e, &end, 10);
++            if (*end != '=') break;
++            unsigned long n = strtoul(end + 1, &end, 10);
++            if (w < 32 && n < 256) s_over[w] = (u8)n;
++            e = (*end == ',') ? end + 1 : NULL;
++        }
++        s_init = 1;
++    }
++    return wid < 32 ? s_over[wid] : 0;
++}
+ static u32 wkl_maxcont(u32 ea, u32 wid)
+-{ return wid < 16 ? vm_read8(ea + SPURS_WKL_MAXCONT + wid) : s_workloads[wid].maxContention; }
++{
++    const u32 over = wkl_maxcont_override(wid);
++    if (over) return over;
++    return wid < 16 ? vm_read8(ea + SPURS_WKL_MAXCONT + wid) : s_workloads[wid].maxContention;
++}
+ static void wkl_curcont_set(u32 ea, u32 wid, u8 v)
+ { if (wid < 16) vm_base[ea + SPURS_WKL_CURCONT + wid] = v; }
+ 
+diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
+index cf3a910..a8fc0dd 100644
+--- a/runtime/spu/spu_channels.c
++++ b/runtime/spu/spu_channels.c
+@@ -240,6 +240,18 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
+      * executes at a time. No-op when unarmed. The thread-local halt env above
+      * makes a token pause/resume mid-run safe. */
+     yz_lockstep_register(ctx);
++    /* The SPU's float mode for the run (spu_helpers.h, spu__xs_fa): single
++     * precision truncates and flushes denormals, which MXCSR's RZ/FTZ/DAZ do
++     * in one instruction; the helpers that need round-to-nearest switch back
++     * for their own span. SPU_FAST_FP=0 keeps the standard mode (every float
++     * op on the exact path, as before). longjmp restores the mode setjmp saw,
++     * so a halt lands in this mode and the restore below still runs. */
++#if defined(__x86_64__) || defined(_M_X64)
++    static int s_fast_fp = -1;
++    if (s_fast_fp < 0) { const char* e = getenv("SPU_FAST_FP"); s_fast_fp = !(e && e[0] == '0'); }
++    const unsigned csr_saved = _mm_getcsr();
++    if (s_fast_fp) _mm_setcsr(csr_saved | SPU_MXCSR_SPU_BITS);
++#endif
+     switch (setjmp(s_spu_halt_env)) {
+     case 1:
+         halted = 1;
+@@ -269,6 +281,9 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
+               fflush(stderr); } }
+         SPU_DRAIN(ctx);
+     }
++#if defined(__x86_64__) || defined(_M_X64)
++    _mm_setcsr(csr_saved);
++#endif
+     yz_lockstep_unregister(ctx);   /* leave the ring; hand the token onward */
+     s_spu_halt_armed = outer_armed;
+     if (outer_armed) memcpy(s_spu_halt_env, outer_env, sizeof(jmp_buf));
+diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
+index f3bd021..5591832 100644
+--- a/runtime/spu/spu_helpers.h
++++ b/runtime/spu/spu_helpers.h
+@@ -596,6 +596,20 @@ static inline uint32_t spu__fma_lane(uint32_t x, uint32_t y, uint32_t z, uint32_
+     if (!nz) return spu__sf_pack(sp, p, ex + ey);
+     return spu__sf_sum(sp, p, ex + ey, sz, mz, ez);
+ }
++/* The SPU float mode in MXCSR (see spu__xs_fa below) and a scope that puts the
++ * host's standard mode back, for code that needs round-to-nearest with
++ * denormals: the exact single-precision paths and SPU double precision. */
++#if defined(__x86_64__) || defined(_M_X64)
++#include <xmmintrin.h>
++#define SPU_MXCSR_SPU_BITS 0xE040u            /* RZ rounding (0x6000) | FTZ (0x8000) | DAZ (0x0040) */
++#define SPU_FP_STD_BEGIN const unsigned spu__csr_saved = _mm_getcsr(); \
++    if (spu__csr_saved & SPU_MXCSR_SPU_BITS) _mm_setcsr(spu__csr_saved & ~SPU_MXCSR_SPU_BITS)
++#define SPU_FP_STD_END if (spu__csr_saved & SPU_MXCSR_SPU_BITS) _mm_setcsr(spu__csr_saved)
++#else
++#define SPU_FP_STD_BEGIN (void)0
++#define SPU_FP_STD_END (void)0
++#endif
++
+ /* Fast path, exact by construction, for the common case where every operand is an ordinary
+  * normal single (biased exponent 1..254): the value is formed in double precision and truncated
+  * by masking the 29 low significand bits, which is truncation toward zero of the magnitude.
+@@ -913,21 +927,27 @@ SPU__XS_INLINE int spu__xs_all4(__m128i m) { return _mm_movemask_ps(_mm_castsi12
+ #define SPU__XS_LANES(v, m) uint32_t m[4]; _mm_storeu_si128((__m128i*)(void*)m, v)
+ SPU__XS_SLOW __m128i spu__xs_fa_fix(__m128i r, __m128i ok, __m128i a, __m128i b, uint32_t negb) {
+     SPU__XS_LANES(r, o); SPU__XS_LANES(ok, m); SPU__XS_LANES(a, x); SPU__XS_LANES(b, y);
++    SPU_FP_STD_BEGIN;
+     for (int i = 0; i < 4; i++) if (!m[i]) o[i] = spu__fa_any(x[i], y[i] ^ negb);
++    SPU_FP_STD_END;
+     return _mm_loadu_si128((const __m128i*)(const void*)o);
+ }
+ SPU__XS_SLOW __m128i spu__xs_fm_fix(__m128i r, __m128i ok, __m128i a, __m128i b) {
+     SPU__XS_LANES(r, o); SPU__XS_LANES(ok, m); SPU__XS_LANES(a, x); SPU__XS_LANES(b, y);
++    SPU_FP_STD_BEGIN;
+     for (int i = 0; i < 4; i++) if (!m[i]) o[i] = spu__fm_any(x[i], y[i]);
++    SPU_FP_STD_END;
+     return _mm_loadu_si128((const __m128i*)(const void*)o);
+ }
+ SPU__XS_SLOW __m128i spu__xs_fma_fix(__m128i r, __m128i ok, __m128i a, __m128i b, __m128i c,
+                                      uint32_t negp, uint32_t negc) {
+     SPU__XS_LANES(r, o); SPU__XS_LANES(ok, m); SPU__XS_LANES(a, x); SPU__XS_LANES(b, y); SPU__XS_LANES(c, z);
++    SPU_FP_STD_BEGIN;
+     for (int i = 0; i < 4; i++) if (!m[i]) o[i] = spu__fma_any(x[i], y[i], z[i], negp, negc);
++    SPU_FP_STD_END;
+     return _mm_loadu_si128((const __m128i*)(const void*)o);
+ }
+-SPU__XS_INLINE u128 spu__xs_fa(u128 a, u128 b, uint32_t negb) {
++SPU__XS_INLINE u128 spu__xs_fa_exact(u128 a, u128 b, uint32_t negb) {
+     const __m128i xa = spu__xs_ld(a), yb = spu__xs_ld(b);
+     const __m128i x = xa, y = _mm_xor_si128(yb, _mm_set1_epi32((int)negb));
+     /* the exponent-gap limit (exact sum in double) applies only between two nonzero terms */
+@@ -943,9 +963,7 @@ SPU__XS_INLINE u128 spu__xs_fa(u128 a, u128 b, uint32_t negb) {
+     if (!spu__xs_all4(ok)) r = spu__xs_fa_fix(r, ok, xa, yb, negb);
+     return spu__xs_st(r);
+ }
+-SPU__XS_INLINE u128 spu_fa(u128 a, u128 b) { return spu__xs_fa(a, b, 0); }
+-SPU__XS_INLINE u128 spu_fs(u128 a, u128 b) { return spu__xs_fa(a, b, 0x80000000u); }
+-SPU__XS_INLINE u128 spu_fm(u128 a, u128 b) {
++SPU__XS_INLINE u128 spu__xs_fm_exact(u128 a, u128 b) {
+     const __m128i x = spu__xs_ld(a), y = spu__xs_ld(b);
+     __m128i oklo, okhi, zlo, zhi;
+     const __m128 lo = spu__xs_trunc0(_mm_mul_pd(spu__xs_lo(x), spu__xs_lo(y)), NULL, &oklo, &zlo);
+@@ -955,27 +973,88 @@ SPU__XS_INLINE u128 spu_fm(u128 a, u128 b) {
+     if (!spu__xs_all4(ok)) r = spu__xs_fm_fix(r, ok, x, y);
+     return spu__xs_st(r);
+ }
++/* The SPU's own float mode on the host. Single-precision SPU arithmetic truncates
++ * (rounds toward zero), reads a denormal operand as zero and flushes a denormal
++ * result to zero -- exactly MXCSR's RZ rounding with FTZ and DAZ. spu_run_with_halt
++ * puts an SPU thread in that mode while it runs SPU code (spu_fp_mode_enter); then
++ * fa/fs/fm are one SSE instruction when no lane can leave the normal range (the
++ * SPU has no infinity: biased exponent 255 is ordinary extended range, which the
++ * host would turn into Inf/NaN). Every other case -- an extended-range operand, a
++ * possible overflow, or code not running in that mode -- takes the exact path,
++ * in the host's standard mode. tests/test_spu_float_neon.c checks both modes bit
++ * for bit against the scalar references. */
++SPU__XS_INLINE int spu__fp_spu_mode(void) { return (_mm_getcsr() & SPU_MXCSR_SPU_BITS) == SPU_MXCSR_SPU_BITS; }
++/* The vector exact paths do their arithmetic in double where it is exact (a sum
++ * of singles less than 30 binades apart, a product of two singles), so they
++ * hold in either mode; their scalar fix-ups switch to the standard mode. */
++SPU__XS_SLOW u128 spu__xs_fa_std(u128 a, u128 b, uint32_t negb) { return spu__xs_fa_exact(a, b, negb); }
++SPU__XS_SLOW u128 spu__xs_fm_std(u128 a, u128 b) { return spu__xs_fm_exact(a, b); }
++/* the sign cleared where the result is zero (the SPU never produces -0) */
++SPU__XS_INLINE __m128 spu__xs_pos0f(__m128 r) {
++    return _mm_andnot_ps(_mm_and_ps(_mm_cmpeq_ps(r, _mm_setzero_ps()), _mm_castsi128_ps(_mm_set1_epi32((int)0x80000000u))), r);
++}
++SPU__XS_INLINE u128 spu__xs_fa(u128 a, u128 b, uint32_t negb) {
++    if (spu__fp_spu_mode()) {
++        const __m128i x = spu__xs_ld(a), y = _mm_xor_si128(spu__xs_ld(b), _mm_set1_epi32((int)negb));
++        /* both below 2^127 (biased exponent <= 253; 0 is a zero or a denormal, read as zero):
++         * the sum stays below 2^128 and truncation never rounds up */
++        const __m128i big = _mm_or_si128(_mm_cmpgt_epi32(spu__xs_bexp(x), _mm_set1_epi32(253)),
++                                         _mm_cmpgt_epi32(spu__xs_bexp(y), _mm_set1_epi32(253)));
++        if (_mm_testz_si128(big, big))
++            return spu__xs_st(_mm_castps_si128(spu__xs_pos0f(_mm_add_ps(_mm_castsi128_ps(x), _mm_castsi128_ps(y)))));
++    }
++    return spu__xs_fa_std(a, b, negb);
++}
++SPU__XS_INLINE u128 spu_fa(u128 a, u128 b) { return spu__xs_fa(a, b, 0); }
++SPU__XS_INLINE u128 spu_fs(u128 a, u128 b) { return spu__xs_fa(a, b, 0x80000000u); }
++SPU__XS_INLINE u128 spu_fm(u128 a, u128 b) {
++    if (spu__fp_spu_mode()) {
++        const __m128i x = spu__xs_ld(a), y = spu__xs_ld(b);
++        const __m128i ex = spu__xs_bexp(x), ey = spu__xs_bexp(y);
++        /* each below 2^127 and the product below 2^128: biased exponents summing to at most 380 */
++        const __m128i big = _mm_or_si128(_mm_or_si128(_mm_cmpgt_epi32(ex, _mm_set1_epi32(253)),
++                                                      _mm_cmpgt_epi32(ey, _mm_set1_epi32(253))),
++                                         _mm_cmpgt_epi32(_mm_add_epi32(ex, ey), _mm_set1_epi32(380)));
++        if (_mm_testz_si128(big, big))
++            return spu__xs_st(_mm_castps_si128(spu__xs_pos0f(_mm_mul_ps(_mm_castsi128_ps(x), _mm_castsi128_ps(y)))));
++    }
++    return spu__xs_fm_std(a, b);
++}
+ /* p + z with its exact rounding error (TwoSum); the product is exact in double */
+ SPU__XS_INLINE __m128d spu__xs_twosum(__m128d p, __m128d z, __m128d* err) {
+     const __m128d s = _mm_add_pd(p, z), bb = _mm_sub_pd(s, p);
+     *err = _mm_add_pd(_mm_sub_pd(p, _mm_sub_pd(s, bb)), _mm_sub_pd(z, bb));
+     return s;
+ }
+-SPU__XS_INLINE u128 spu__xs_fma(u128 a, u128 b, u128 c, uint32_t negp, uint32_t negc) {
++SPU__XS_INLINE u128 spu__xs_fma_exact2(u128 a, u128 b, u128 c, uint32_t negp, uint32_t negc, int rz) {
+     const __m128i xa = spu__xs_ld(a), y = spu__xs_ld(b), zc = spu__xs_ld(c);
+     const __m128i x = _mm_xor_si128(xa, _mm_set1_epi32((int)negp)), z = _mm_xor_si128(zc, _mm_set1_epi32((int)negc));
+     __m128i oklo, okhi, zlo, zhi;
+     __m128d elo, ehi;
+-    const __m128d slo = spu__xs_twosum(_mm_mul_pd(spu__xs_lo(x), spu__xs_lo(y)), spu__xs_lo(z), &elo);
+-    const __m128d shi = spu__xs_twosum(_mm_mul_pd(spu__xs_hi(x), spu__xs_hi(y)), spu__xs_hi(z), &ehi);
+-    const __m128 lo = spu__xs_trunc0(slo, &elo, &oklo, &zlo);
+-    const __m128 hi = spu__xs_trunc0(shi, &ehi, &okhi, &zhi);
++    __m128d slo, shi;
++    if (rz) {    /* the double sum truncates toward zero: trunc24(trunc53(v)) = trunc24(v) */
++        slo = _mm_add_pd(_mm_mul_pd(spu__xs_lo(x), spu__xs_lo(y)), spu__xs_lo(z));
++        shi = _mm_add_pd(_mm_mul_pd(spu__xs_hi(x), spu__xs_hi(y)), spu__xs_hi(z));
++    } else {
++        slo = spu__xs_twosum(_mm_mul_pd(spu__xs_lo(x), spu__xs_lo(y)), spu__xs_lo(z), &elo);
++        shi = spu__xs_twosum(_mm_mul_pd(spu__xs_hi(x), spu__xs_hi(y)), spu__xs_hi(z), &ehi);
++    }
++    const __m128 lo = spu__xs_trunc0(slo, rz ? NULL : &elo, &oklo, &zlo);
++    const __m128 hi = spu__xs_trunc0(shi, rz ? NULL : &ehi, &okhi, &zhi);
+     const __m128i ok = _mm_and_si128(_mm_and_si128(_mm_and_si128(spu__xs_plain0(x), spu__xs_plain0(y)), spu__xs_plain0(z)),
+                                      spu__xs_pack(oklo, okhi));
+     __m128i r = spu__xs_pos0(spu__xs_vec(lo, hi), zlo, zhi);
+     if (!spu__xs_all4(ok)) r = spu__xs_fma_fix(r, ok, xa, y, zc, negp, negc);
+     return spu__xs_st(r);
+ }
++/* Standard mode: TwoSum and the boundary test. SPU mode: the plain double sum.
++ * Any other mode (rounding bits set some other way) goes the standard way. */
++SPU__XS_INLINE u128 spu__xs_fma(u128 a, u128 b, u128 c, uint32_t negp, uint32_t negc) {
++    const unsigned csr = _mm_getcsr() & SPU_MXCSR_SPU_BITS;
++    if (csr == SPU_MXCSR_SPU_BITS) return spu__xs_fma_exact2(a, b, c, negp, negc, 1);
++    if (!csr) return spu__xs_fma_exact2(a, b, c, negp, negc, 0);
++    SPU_FP_STD_BEGIN; const u128 r = spu__xs_fma_exact2(a, b, c, negp, negc, 0); SPU_FP_STD_END; return r;
++}
+ SPU__XS_INLINE u128 spu_fma(u128 a, u128 b, u128 c)  { return spu__xs_fma(a, b, c, 0, 0); }            /* a*b + c */
+ SPU__XS_INLINE u128 spu_fms(u128 a, u128 b, u128 c)  { return spu__xs_fma(a, b, c, 0, 0x80000000u); }  /* a*b - c */
+ SPU__XS_INLINE u128 spu_fnms(u128 a, u128 b, u128 c) { return spu__xs_fma(a, b, c, 0x80000000u, 0); }  /* c - a*b */
+@@ -1126,16 +1205,17 @@ static inline uint64_t spu__d_out(double d) {
+     uint64_t u; memcpy(&u, &d, 8);
+     return spu__d_isnan(u) ? 0x7FF8000000000000ull : u;
+ }
+-#define SPU__D_V2(name, op) static inline u128 name(u128 a, u128 b) { u128 r; for (int i = 0; i < 2; i++) { \
++#define SPU__D_V2(name, op) static inline u128 name(u128 a, u128 b) { u128 r; SPU_FP_STD_BEGIN; for (int i = 0; i < 2; i++) { \
+     const uint64_t x = spu__dw_get(a, i), y = spu__dw_get(b, i); \
+     spu__dw_put(&r, i, (spu__d_isnan(x) || spu__d_isnan(y)) ? 0x7FF8000000000000ull \
+-                       : spu__d_out(spu__d_in(x) op spu__d_in(y))); } return r; }
++                       : spu__d_out(spu__d_in(x) op spu__d_in(y))); } SPU_FP_STD_END; return r; }
+ SPU__D_V2(spu_dfa, +)
+ SPU__D_V2(spu_dfs, -)
+ SPU__D_V2(spu_dfm, *)
+ #undef SPU__D_V2
+ /* dfma = a*b + c, dfms = a*b - c, dfnms = -(a*b - c), dfnma = -(a*b + c); c is rt. Fused. */
+ static inline u128 spu__dfmx(u128 a, u128 b, u128 c, int negate, int subtract) { u128 r;
++    SPU_FP_STD_BEGIN;
+     for (int i = 0; i < 2; i++) {
+         const uint64_t x = spu__dw_get(a, i), y = spu__dw_get(b, i), z = spu__dw_get(c, i);
+         if (spu__d_isnan(x) || spu__d_isnan(y) || spu__d_isnan(z)) { spu__dw_put(&r, i, 0x7FF8000000000000ull); continue; }
+@@ -1147,6 +1227,7 @@ static inline u128 spu__dfmx(u128 a, u128 b, u128 c, int negate, int subtract) {
+         const uint64_t u = spu__d_out(v);
+         spu__dw_put(&r, i, (negate && !spu__d_isnan(u)) ? u ^ 0x8000000000000000ull : u);
+     }
++    SPU_FP_STD_END;
+     return r; }
+ static inline u128 spu_dfma(u128 a, u128 b, u128 t)  { return spu__dfmx(a, b, t, 0, 0); }
+ static inline u128 spu_dfms(u128 a, u128 b, u128 t)  { return spu__dfmx(a, b, t, 0, 1); }
+@@ -1168,6 +1249,7 @@ static inline u128 spu_fesd(u128 a) { u128 r;
+     }
+     return r; }
+ static inline u128 spu_frds(u128 a) { u128 r;
++    SPU_FP_STD_BEGIN;
+     for (int i = 0; i < 2; i++) {
+         const uint64_t u = spu__dw_get(a, i);
+         if (spu__d_isnan(u)) { r._u32[2*i] = 0x7FC00000u; r._u32[2*i+1] = 0; continue; }
+@@ -1175,6 +1257,7 @@ static inline u128 spu_frds(u128 a) { u128 r;
+         uint32_t w; memcpy(&w, &f, 4);
+         r._u32[2*i] = w; r._u32[2*i+1] = 0;
+     }
++    SPU_FP_STD_END;
+     return r; }
+ 
+ 
+@@ -1191,8 +1274,8 @@ static inline void spu__dset(u128* r, int i, double d) {
+ }
+ /* double FMA family: c = rt (accumulator, 3-register). The SPU DFMA family is FUSED (single rounding). */
+ /* double compares -> per-lane 64-bit mask (RPCS3 stubs these; sane impl here). */
+-static inline u128 spu_dfceq(u128 a, u128 b)  { u128 r; for(int i=0;i<2;i++){ uint64_t m=(spu__dget(a,i)==spu__dget(b,i))?~0ull:0ull; r._u32[i*2]=(uint32_t)(m>>32); r._u32[i*2+1]=(uint32_t)m; } return r; }
+-static inline u128 spu_dfcmeq(u128 a, u128 b) { u128 r; for(int i=0;i<2;i++){ double x=spu__dget(a,i),y=spu__dget(b,i); if(x<0)x=-x; if(y<0)y=-y; uint64_t m=(x==y)?~0ull:0ull; r._u32[i*2]=(uint32_t)(m>>32); r._u32[i*2+1]=(uint32_t)m; } return r; }
++static inline u128 spu_dfceq(u128 a, u128 b)  { u128 r; SPU_FP_STD_BEGIN; for(int i=0;i<2;i++){ uint64_t m=(spu__dget(a,i)==spu__dget(b,i))?~0ull:0ull; r._u32[i*2]=(uint32_t)(m>>32); r._u32[i*2+1]=(uint32_t)m; } SPU_FP_STD_END; return r; }
++static inline u128 spu_dfcmeq(u128 a, u128 b) { u128 r; SPU_FP_STD_BEGIN; for(int i=0;i<2;i++){ double x=spu__dget(a,i),y=spu__dget(b,i); if(x<0)x=-x; if(y<0)y=-y; uint64_t m=(x==y)?~0ull:0ull; r._u32[i*2]=(uint32_t)(m>>32); r._u32[i*2+1]=(uint32_t)m; } SPU_FP_STD_END; return r; }
+ /* Singles occupy preferred words 0 and 2 when converting doubleword lanes. */
+ /* mpyhhu: high-16 x high-16 of each word, unsigned, full 32-bit product. */
+ static inline u128 spu_mpyhhu_ref(u128 a, u128 b){ u128 r; for(int i=0;i<4;i++) r._u32[i]=(uint32_t)a._u16[2*i+1]*(uint32_t)b._u16[2*i+1]; return r; }
+@@ -1209,8 +1292,8 @@ static inline u128 spu_avgb_ref(u128 a, u128 b)   { u128 r; for(int i=0;i<16;i++
+ static inline u128 spu_mpyhha_ref(u128 a, u128 b, u128 t)  { u128 r; for(int i=0;i<4;i++) r._s32[i]=t._s32[i]+(int32_t)a._s16[2*i+1]*(int32_t)b._s16[2*i+1]; return r; }
+ static inline u128 spu_mpyhhau_ref(u128 a, u128 b, u128 t) { u128 r; for(int i=0;i<4;i++) r._u32[i]=t._u32[i]+(uint32_t)a._u16[2*i+1]*(uint32_t)b._u16[2*i+1]; return r; }
+ /* double compare greater (RPCS3 stubs these; sane impl) -> per-lane mask. */
+-static inline u128 spu_dfcgt(u128 a, u128 b)  { u128 r; for(int i=0;i<2;i++){ uint64_t m=(spu__dget(a,i)>spu__dget(b,i))?~0ull:0ull; r._u32[i*2]=(uint32_t)(m>>32); r._u32[i*2+1]=(uint32_t)m; } return r; }
+-static inline u128 spu_dfcmgt(u128 a, u128 b) { u128 r; for(int i=0;i<2;i++){ double x=spu__dget(a,i),y=spu__dget(b,i); if(x<0)x=-x; if(y<0)y=-y; uint64_t m=(x>y)?~0ull:0ull; r._u32[i*2]=(uint32_t)(m>>32); r._u32[i*2+1]=(uint32_t)m; } return r; }
++static inline u128 spu_dfcgt(u128 a, u128 b)  { u128 r; SPU_FP_STD_BEGIN; for(int i=0;i<2;i++){ uint64_t m=(spu__dget(a,i)>spu__dget(b,i))?~0ull:0ull; r._u32[i*2]=(uint32_t)(m>>32); r._u32[i*2+1]=(uint32_t)m; } SPU_FP_STD_END; return r; }
++static inline u128 spu_dfcmgt(u128 a, u128 b) { u128 r; SPU_FP_STD_BEGIN; for(int i=0;i<2;i++){ double x=spu__dget(a,i),y=spu__dget(b,i); if(x<0)x=-x; if(y<0)y=-y; uint64_t m=(x>y)?~0ull:0ull; r._u32[i*2]=(uint32_t)(m>>32); r._u32[i*2+1]=(uint32_t)m; } SPU_FP_STD_END; return r; }
+ /* dftsv rt,ra,I7: double test special value (Cell BE SPU ISA). Each
+  * doubleword becomes all ones if it is in any class I7 selects:
+  * 0x40 NaN, 0x20 +inf, 0x10 -inf, 0x08 +0, 0x04 -0, 0x02 +denorm, 0x01 -denorm.
+diff --git a/runtime/spu/tests/test_spu_float_neon.c b/runtime/spu/tests/test_spu_float_neon.c
+index d7d00df..3463957 100644
+--- a/runtime/spu/tests/test_spu_float_neon.c
++++ b/runtime/spu/tests/test_spu_float_neon.c
+@@ -3,9 +3,13 @@
+  * the normal/extended-range boundaries, zeros and denormals, mixed per lane.
+  * Prints a rough speed comparison too. Build on arm64:
+  *   cc -O2 -I.. -I../.. -I../../.. test_spu_float_neon.c -o t && ./t
+- * or on x86-64 with -msse4.1 (clang-cl: clang-cl -O2 -msse4.1 ...). */
++ * or on x86-64 with -msse4.1 (clang-cl: clang-cl -O2 -msse4.1 ...).
++ * On x86-64, `--spu-mode` runs every check again with MXCSR in the SPU float mode
++ * (round toward zero, FTZ, DAZ), where fa/fs/fm take their one-instruction fast path;
++ * the references are integer code and do not depend on the mode. */
+ #include "../spu_helpers.h"
+ #include <stdio.h>
++#include <string.h>
+ #include <stdlib.h>
+ #include <time.h>
+ 
+@@ -30,8 +34,19 @@ static uint32_t rnd_float(void)
+     return sign | (e << 23) | man;
+ }
+ 
+-int main(void)
++static int s_spu_mode;
++
++int main(int argc, char** argv)
+ {
++#if defined(__x86_64__) || defined(_M_X64)
++    if (argc > 1 && !strcmp(argv[1], "--spu-mode")) {
++        _mm_setcsr(_mm_getcsr() | SPU_MXCSR_SPU_BITS);
++        s_spu_mode = 1;
++        puts("test_spu_float_neon: MXCSR in the SPU float mode");
++    }
++#else
++    (void)argc; (void)argv;
++#endif
+ #if !defined(__ARM_NEON) && !defined(__SSE4_1__)
+     puts("test_spu_float_neon: no NEON or SSE4.1, nothing to compare");
+     return 0;
+@@ -108,7 +123,7 @@ int main(void)
+         one._u32[0] = 0x3F800000u; tiny._u32[0] = 0x80000000u | ((127u - 60u) << 23);   /* -2^-60 */
+         const u128 r = spu_fma(one, one, tiny);
+         if (r._u32[0] != 0x3F7FFFFFu) { printf("fma(1, 1, -2^-60) = %08X, want 3F7FFFFF\n", r._u32[0]); bad++; }
+-        if (bad || !hits || !exact_sums) {
++        if (bad || (!s_spu_mode && (!hits || !exact_sums))) {
+             printf("test_spu_float_neon: boundary pass: %ld mismatches, %ld rounded-onto-boundary lanes, "
+                    "%ld exact sums\n", bad, hits, exact_sums);
+             return 1;
+diff --git a/templates/project/CMakeLists.txt b/templates/project/CMakeLists.txt
+index 43c75a3..1530f51 100644
+--- a/templates/project/CMakeLists.txt
++++ b/templates/project/CMakeLists.txt
+@@ -200,10 +200,18 @@ if(SPU_SOURCES)
+         # The runtime gets the same flag; probed, as Apple arm64 clang rejects it.
+         include(CheckCCompilerFlag)
+         check_c_compiler_flag(-msse4.1 PORT_HAS_MSSE41)
++        # The SPU float fast path (spu_helpers.h) runs with MXCSR rounding toward
++        # zero; -frounding-math keeps the compiler from folding float ops on
++        # constants under round-to-nearest. clang-cl takes it as /clang:.
++        if(MSVC)
++            set(SPU_ROUNDING_MATH "/clang:-frounding-math")
++        else()
++            set(SPU_ROUNDING_MATH "-frounding-math")
++        endif()
+         if(PORT_HAS_MSSE41)
+-            set_source_files_properties(${SPU_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2;-msse4.1")
++            set_source_files_properties(${SPU_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2;-msse4.1;${SPU_ROUNDING_MATH}")
+         else()
+-            set_source_files_properties(${SPU_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2")
++            set_source_files_properties(${SPU_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2;${SPU_ROUNDING_MATH}")
+         endif()
+     endif()
+ endif()
+-- 
+2.55.0.windows.5
+

@@ -1,0 +1,285 @@
+From cea2b4f7349f64b6c675b702828a14007dcee8a8 Mon Sep 17 00:00:00 2001
+From: Arnaldo Lima <arnaldolimaof@gmail.com>
+Date: Sun, 18 Oct 2026 19:17:18 -0300
+Subject: [PATCH] Taskset bitset clears under the lock-line lock;
+ SPU_REJOIN_CALL; SPU_PCWATCH_R90
+
+The minimal taskset scheduler (ts_start_ready, spu_taskset_task_exited)
+cleared ready/pending/enabled bits with a plain byte read-modify-write,
+while the SPU task library creates tasks with GETLLAR/PUTLLC on the same
+line. An exit landing on a creation in the same byte wrote the old byte
+back and dropped the new task. God of War: Ascension's particle job lost
+one of the five next-phase tasks now and then, the PPU waited for a count
+of 5 that stopped at 4, and the level load froze. ts_bits_clear holds the
+lock-line lock and breaks the line's reservations, as spurs_bitset_rmw
+does for the signal bits; the game now reaches its first level.
+
+SPU_REJOIN_CALL=1: lifted code the interpreter rejoins runs in a drain of
+the interpreter's own (spu_drain_interp), so its first host return resumes
+interpretation at that pc instead of landing in the enclosing lifted
+frame's drain (drain-resume or a restart from the driver).
+g_spu_drain_anyret holds the host_depth of that drain; calls made under it
+rejoin with their own.
+
+SPU_PCWATCH_R90=1: SPU_PCWATCH hits also print r0/r1/r9/r11/r90/r93 and
+the 32 bytes at r90+0x220.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ runtime/spu/spu_channels.c | 41 +++++++++++++++++++++++++++++++++++++-
+ runtime/spu/spu_drain.c    | 33 ++++++++++++++++++++++++++----
+ runtime/spu/spu_interp.c   | 13 ++++++++++++
+ runtime/spu/spu_workload.c | 29 +++++++++++++++++++++------
+ 4 files changed, 105 insertions(+), 11 deletions(-)
+
+diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
+index ff447ed..03ba460 100644
+--- a/runtime/spu/spu_channels.c
++++ b/runtime/spu/spu_channels.c
+@@ -235,6 +235,9 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
+     if (outer_armed) memcpy(outer_env, s_spu_halt_env, sizeof(jmp_buf));
+     s_spu_halt_armed = 1;
+     g_spu_trampoline_fn = 0;                        /* no stale transfer pending */
++    extern SPU_THREAD_LOCAL int g_spu_drain_anyret;
++    const int outer_anyret = g_spu_drain_anyret;     /* an interpreter's drain is no frame of this run */
++    g_spu_drain_anyret = 0;
+     /* Lockstep gate (env SPU_LOCKSTEP, default off): join the round-robin
+      * ring and BLOCK until this ctx holds the run token, so only one lifted SPU
+      * executes at a time. No-op when unarmed. The thread-local halt env above
+@@ -262,6 +265,7 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
+          * Re-enter its target with the same guest state on the driver stack. */
+         ctx->host_depth = 0;
+         g_spu_trampoline_fn = 0;
++        g_spu_drain_anyret = 0;
+         spu_indirect_branch(ctx);
+         SPU_DRAIN(ctx);
+         break;
+@@ -287,6 +291,7 @@ int spu_run_with_halt(void (*entry)(spu_context*), spu_context* ctx)
+     yz_lockstep_unregister(ctx);   /* leave the ring; hand the token onward */
+     s_spu_halt_armed = outer_armed;
+     if (outer_armed) memcpy(s_spu_halt_env, outer_env, sizeof(jmp_buf));
++    g_spu_drain_anyret = outer_anyret;
+     return halted;
+ }
+ 
+@@ -2698,7 +2703,9 @@ static int spu_smc_microstep(spu_context* ctx)
+          * no lifted entry, and a job's return would otherwise run on through
+          * the caller's code (GH3's song-freeze; see drain_ret_pc). */
+         const uint32_t return_pc = ctx->drain_ret_pc;
+-        uint32_t result = spu_interp_run_until(ctx, pc, return_pc);
++        uint32_t result;
++    interp_again:
++        result = spu_interp_run_until(ctx, pc, return_pc);
+         /* SPU_INTERP_HIST=1: instructions interpreted per (overlay, entry),
+          * the top 16 every 5 s -- where interpreter time actually goes (the
+          * microstep line above prints each entry once, not its cost). */
+@@ -2734,6 +2741,38 @@ static int spu_smc_microstep(spu_context* ctx)
+                   }
+                   for (int i = 0; i < hn; i++) h[i].steps = 0, h[i].calls = 0;
+               } } }
++        /* SPU_REJOIN_CALL=1: the lifted code the interpreter rejoins runs in a
++         * drain of this interpreter's own (spu_drain_interp), and its first
++         * host return -- a `bi $lr` back to an interpreted caller, or out of
++         * a function entered mid-body -- resumes interpretation at that pc.
++         * As a plain transfer that host return fell to the enclosing lifted
++         * frame's drain, whose return point it is not: the drain restarted
++         * dispatch from the driver and dropped every host frame above the job
++         * (Ascension's level-load job, module 204, froze between the loading
++         * movies). Under an interpreter's drain already, the transfer below
++         * is right: the host return lands with that interpreter. At
++         * return_pc the re-run below stops at once and returns. */
++        { static int s_rc = -1; if (s_rc < 0) { const char* e = getenv("SPU_REJOIN_CALL"); s_rc = e && *e == '1'; }
++          extern SPU_THREAD_LOCAL int g_spu_drain_anyret;
++          extern void spu_drain_interp(spu_context*, uint32_t);
++          if (s_rc && g_spu_drain_anyret != (int)ctx->host_depth && ctx->image_id >= 0 && (ctx->status & SPU_STATUS_RUNNING) &&
++              (!return_pc || (ctx->pc & SPU_LS_MASK) != return_pc) &&
++              spu_lifted_probe(ctx, ctx->pc)) {
++              { static int _n = 0; if (_n++ < 8)
++                  fprintf(stderr, "[spu-rejoin] img=%d ovl=%d lifted 0x%05X lr=0x%05X depth=%u\n",
++                          ctx->image_id, ctx->resident_ovl, ctx->pc & SPU_LS_MASK,
++                          ctx->gpr[0]._u32[0] & SPU_LS_MASK, ctx->host_depth); }
++              const int32_t si = (int32_t)ctx->image_id;
++              ctx->host_depth++;
++              g_spu_trampoline_fn = spu_indirect_branch;
++              spu_drain_interp(ctx, return_pc);
++              ctx->host_depth--;
++              spu_img_restore(ctx, si);
++              ctx->drain_ret_pc = return_pc;   /* the inner drain cleared it */
++              if (!(ctx->status & SPU_STATUS_RUNNING)) return 1;
++              pc = ctx->pc & SPU_LS_MASK;
++              goto interp_again;
++          } }
+         /* A live interpreter rejoin is a transfer, not a host return. Nested
+          * drains can repair an empty trampoline, but the top-level driver
+          * otherwise ends the run before executing the lifted target.
+diff --git a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
+index aa2e62c..26542fc 100644
+--- a/runtime/spu/spu_drain.c
++++ b/runtime/spu/spu_drain.c
+@@ -542,19 +542,27 @@ int spu_tailret_enabled(void)
+ typedef void (*spu_drain_fn)(spu_context*);
+ extern spu_drain_fn spu_lookup(uint32_t addr, int image_id);
+ 
+-void spu_drain_call(spu_context* ctx, uint32_t return_pc)
++/* The host_depth of the interpreter's drain (spu_drain_interp) running on
++ * this thread, 0 if the innermost drain is not one. A rejoin at that depth is
++ * a trampoline of that drain, where a host return just means "the guest goes
++ * to pc next" and the interpreter owning it continues there
++ * (spu_smc_microstep); a call bracket raises host_depth before it drains. */
++SPU_THREAD_LOCAL int g_spu_drain_anyret;
++
++static void spu_drain_loop(spu_context* ctx, uint32_t return_pc, int anyret)
+ {
+     spu_depth_guard(ctx);
++    const int outer_anyret = g_spu_drain_anyret;
+     /* The frame an interrupt taken in THIS loop returns to. It stays armed
+      * after the handler's first host function returns -- the handler keeps
+      * running as trampolines of this loop -- until its iret fires or the
+      * loop exits, whichever first. */
+     spu_irq_frame f;
+     f.prev = 0; f.depth = 0; f.image_id = 0;
+-#define SPU_DRAIN_POP_IRQ() do { if (ctx->irq_frame == &f) ctx->irq_frame = f.prev; ctx->drain_ret_pc = 0; } while (0)
++#define SPU_DRAIN_POP_IRQ() do { if (ctx->irq_frame == &f) ctx->irq_frame = f.prev; ctx->drain_ret_pc = 0; g_spu_drain_anyret = outer_anyret; } while (0)
+     for (;;) {
+         while (g_spu_trampoline_fn) {
+-            if (g_spu_trampoline_fn == spu_indirect_branch &&
++            if (g_spu_trampoline_fn == spu_indirect_branch && (return_pc || !anyret) &&
+                 (ctx->pc & SPU_LS_MASK) == (return_pc & SPU_LS_MASK)) {
+                 g_spu_trampoline_fn = 0;
+                 SPU_DRAIN_POP_IRQ();
+@@ -563,6 +571,7 @@ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
+             void (*fn)(spu_context*) = g_spu_trampoline_fn;
+             g_spu_trampoline_fn = 0;
+             ctx->drain_ret_pc = return_pc & SPU_LS_MASK;   /* re-set: a nested drain changed it */
++            g_spu_drain_anyret = anyret ? (int)ctx->host_depth : 0;
+             yz_lockstep_tick(ctx);
+             spu_task_launch_check(ctx, (void*)fn);
+             if (ctx->int_enable && (ctx->event_status & ctx->event_mask)) {
+@@ -582,6 +591,7 @@ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
+                         /* iret fired deeper: registers restored, pc = srr0 */
+                         ctx->host_depth = f.depth;
+                         ctx->image_id = f.image_id;
++                        g_spu_drain_anyret = anyret ? (int)ctx->host_depth : 0;
+                         g_spu_trampoline_fn = spu_indirect_branch;
+                         SPU_DRAIN_POP_IRQ();
+                     }
+@@ -590,7 +600,9 @@ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
+             }
+             fn(ctx);
+         }
+-        if ((ctx->pc & SPU_LS_MASK) == (return_pc & SPU_LS_MASK)) {
++        /* Not while an interrupt this loop took is still unreturned: its
++         * frame must stay armed for the iret (drain-resume below keeps it). */
++        if ((anyret && ctx->irq_frame != &f) || (ctx->pc & SPU_LS_MASK) == (return_pc & SPU_LS_MASK)) {
+             SPU_DRAIN_POP_IRQ();
+             return;
+         }
+@@ -616,3 +628,16 @@ void spu_drain_call(spu_context* ctx, uint32_t return_pc)
+     }
+ #undef SPU_DRAIN_POP_IRQ
+ }
++
++void spu_drain_call(spu_context* ctx, uint32_t return_pc)
++{
++    spu_drain_loop(ctx, return_pc, 0);
++}
++
++/* The drain of lifted code the interpreter rejoined: it ends at the first
++ * host return, whatever the pc (or at return_pc, the enclosing drain's own
++ * return point, when nonzero). */
++void spu_drain_interp(spu_context* ctx, uint32_t return_pc)
++{
++    spu_drain_loop(ctx, return_pc, 1);
++}
+diff --git a/runtime/spu/spu_interp.c b/runtime/spu/spu_interp.c
+index 513d1a0..a2044bf 100644
+--- a/runtime/spu/spu_interp.c
++++ b/runtime/spu/spu_interp.c
+@@ -449,6 +449,19 @@ void spu_pcwatch(spu_context* ctx, uint32_t pc)
+                     ctx->gpr[3]._u32[0], ctx->gpr[4]._u32[0], ctx->gpr[5]._u32[0], ctx->gpr[6]._u32[0],
+                     ctx->gpr[12]._u32[0], ctx->gpr[80]._u32[0], ctx->gpr[81]._u32[0],
+                     ctx->gpr[82]._u32[0], ctx->gpr[83]._u32[0]);
++        /* SPU_PCWATCH_R90=1: also r0/r1/r9/r11/r90/r93 and the 32 bytes at
++         * r90+0x220 (Ascension job modules: the job manager's service table
++         * and state words sit off r90). */
++        { static int s_r90 = -1; if (s_r90 < 0) s_r90 = getenv("SPU_PCWATCH_R90") ? 1 : 0;
++          if (s_r90 && s_pw_lines <= 400) {
++              const uint32_t b = (ctx->gpr[90]._u32[0] + 0x220) & 0x3FFF0;
++              fprintf(stderr, "[pcwatch]   r0=%08X r1=%08X r9=%08X r11=%08X r90=%08X r93=%08X r90+220:",
++                      ctx->gpr[0]._u32[0], ctx->gpr[1]._u32[0], ctx->gpr[9]._u32[0], ctx->gpr[11]._u32[0],
++                      ctx->gpr[90]._u32[0], ctx->gpr[93]._u32[0]);
++              for (int q = 0; q < 32; q += 4)
++                  fprintf(stderr, " %02X%02X%02X%02X", ctx->ls[b+q], ctx->ls[b+q+1], ctx->ls[b+q+2], ctx->ls[b+q+3]);
++              fprintf(stderr, "\n");
++          } }
+         return;
+     }
+ }
+diff --git a/runtime/spu/spu_workload.c b/runtime/spu/spu_workload.c
+index 2094b7a..579a22f 100644
+--- a/runtime/spu/spu_workload.c
++++ b/runtime/spu/spu_workload.c
+@@ -8,6 +8,7 @@
+ #include "spu_workload.h"
+ #include "spu_lifted_job.h"   /* spu_run_lifted_job */
+ #include "../ps3_log.h"      /* ps3_log_verbose */
++#include "spu_coherency.h"    /* lock-line lock (taskset bitsets) */
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+@@ -381,6 +382,24 @@ static uint8_t* ts_running(uint32_t taskset_ea)
+ static void ts_lock(void)   { while (InterlockedExchange(&s_ts_lock, 1)) Sleep(0); }
+ static void ts_unlock(void) { InterlockedExchange(&s_ts_lock, 0); }
+ 
++/* Clear bits of one taskset bitset byte. The bitsets share the taskset's
++ * first line with what the SPU task library updates by GETLLAR/PUTLLC (a task
++ * created from the SPU sets its enabled and ready bits that way), so the
++ * read-modify-write holds the lock-line lock and breaks the line's
++ * reservations, as spurs_bitset_rmw does: done as a plain byte update, a task
++ * exit landing on a creation in the same byte (tasks 0-7) wrote back the byte
++ * it had read and dropped the new task's bits. God of War: Ascension's
++ * particle job lost one of the five next-phase tasks its last item creates,
++ * the count stopped at 4 of 5 and the level load froze. */
++static void ts_bits_clear(uint32_t ea, uint8_t m)
++{
++    extern uint8_t* vm_base;
++    spu_lockline_lock();
++    vm_base[ea] &= (uint8_t)~m;
++    if (spu_coh_is_reserved(ea)) spu_coh_notify_write(ea);
++    spu_lockline_unlock();
++}
++
+ static void spu_taskset_mark(uint32_t taskset_ea, uint32_t t, int on)
+ {
+     if (!taskset_ea || t >= 128) return;
+@@ -428,7 +447,7 @@ static void ts_start_ready(uint32_t taskset_ea, uint32_t done_task)
+         if (!elf) continue;
+         size_t sz = spu_elf_image_size(vm_base + elf, 2u * 1024 * 1024);
+         if (!sz) continue;
+-        ts[0x20 + t / 8] &= (uint8_t)~m;                 /* pending -> started */
++        ts_bits_clear(taskset_ea + 0x20 + t / 8, m);       /* pending -> started */
+         run[t / 8] |= m;
+         if (ps3_log_verbose()) fprintf(stderr, "[taskset] start task %u of taskset 0x%08X elf=0x%08X "
+                         "(after task %u exited)\n", t, taskset_ea, elf, done_task);
+@@ -449,15 +468,13 @@ void spu_taskset_track(uint32_t taskset_ea)
+ 
+ static void spu_taskset_task_exited(uint32_t taskset_ea, uint32_t done_task)
+ {
+-    extern uint8_t* vm_base;
+     ts_lock();
+-    uint8_t* ts = vm_base + taskset_ea;
+     uint8_t* run = ts_running(taskset_ea);
+     if (done_task < 128) {
+         uint8_t m = (uint8_t)(0x80u >> (done_task & 7));
+-        ts[0x10 + done_task / 8] &= (uint8_t)~m;
+-        ts[0x20 + done_task / 8] &= (uint8_t)~m;
+-        ts[0x30 + done_task / 8] &= (uint8_t)~m;
++        ts_bits_clear(taskset_ea + 0x10 + done_task / 8, m);
++        ts_bits_clear(taskset_ea + 0x20 + done_task / 8, m);
++        ts_bits_clear(taskset_ea + 0x30 + done_task / 8, m);
+         if (run) run[done_task / 8] &= (uint8_t)~m;
+     }
+     ts_start_ready(taskset_ea, done_task);
+-- 
+2.55.0.windows.5
+

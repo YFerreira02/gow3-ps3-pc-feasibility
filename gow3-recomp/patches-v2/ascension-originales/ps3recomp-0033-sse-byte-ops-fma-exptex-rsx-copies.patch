@@ -1,0 +1,2512 @@
+From 3be743989e443693df0c5ec725461196b85d270a Mon Sep 17 00:00:00 2001
+From: Arnaldo Lima <arnaldolimaof@gmail.com>
+Date: Sun, 18 Oct 2026 07:31:06 -0300
+Subject: [PATCH] Menu 12 -> 30 fps and motion blur fixed: SSE byte ops, FMA,
+ EXP_TEX, RSX copies
+
+SPU on x86 (spu_helpers.h, tests/test_spu_qby_sse.c bit for bit vs _ref):
+- rotqby/shlqby/rotqmby and their bi/i forms as one pshufb (they were the
+  _ref byte loops, 110-340 instructions; rotqby is the unaligned-scalar
+  idiom); shufb indexes host-order quadwords directly; cntb by nibble table.
+- spu_fma/fms/fnms in the SPU float mode are one vfmadd under __FMA__
+  (operands and product below 2^127). SPU_ASSUME_SPU_FP: lifted code skips
+  reading MXCSR on every float op (spu_run_with_halt always sets the mode).
+- The LS-load WWS probe moved behind SPU_WWS_RESPROBE; trampoline-step
+  diagnostics share one gate.
+
+Render (live draw):
+- Fragment programs honour EXP_TEX (OPDEST bit 21): the fetch is expanded
+  to [-1,1]. God of War: Ascension's motion blur reads its velocity buffer
+  that way; without it "at rest" read as full speed and the whole menu blurred.
+  LD_EXP_TEX=0 turns it off.
+- Earlier menu work: WPOS origin from SHADER_WINDOW, X32 colour targets,
+  depth packed as ARGB8, Y16X16 halves, volume (3D) textures, F12 capture,
+  texture bind trace, small main-memory targets written back.
+- Texture mutation hash in four lanes; the high-performance GPU is chosen
+  and logged.
+
+GCM/SPURS/PPU:
+- nv3089 unscaled 32-bit rows copy per row (memmove) unless an SPU holds a
+  reservation on the line.
+- SPURS_WID_TIMELOG: per policy-module run, with thread CPU time.
+- barrier_watch_hit gated inline (15% of the main thread with no watch armed).
+- LD_TEXOFF_DBG, SPU_JOB_HIST=2/3, debug console `profip`.
+
+Lifter: --promote-regs (registers in C locals); off by default, no clear gain.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ libs/spurs/cellSpurs.c               |   21 +
+ libs/video/cellGcmSys.c              |   27 +-
+ libs/video/rsx_fp_decompiler.c       |  106 ++-
+ libs/video/rsx_fp_decompiler.h       |   20 +
+ libs/video/rsx_live_draw.c           | 1135 +++++++++++++++++++++++++-
+ runtime/ppu/ppu_loader.cpp           |   13 +
+ runtime/ppu/tests/boot_main.cpp      |   10 +-
+ runtime/spu/spu_context.h            |   10 +-
+ runtime/spu/spu_drain.c              |   99 ++-
+ runtime/spu/spu_helpers.h            |  109 ++-
+ runtime/spu/tests/test_spu_qby_sse.c |   63 ++
+ tools/spu_lifter.py                  |   74 +-
+ 12 files changed, 1621 insertions(+), 66 deletions(-)
+ create mode 100644 runtime/spu/tests/test_spu_qby_sse.c
+
+diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
+index 2442182..ac7528e 100644
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -1930,10 +1930,31 @@ static DWORD WINAPI spurs_pm_worker(LPVOID p)
+             SleepConditionVariableSRW(&si->wake, &si->lock, INFINITE, 0);
+         if (si->stopping && !slot->busy) break;
+         ReleaseSRWLockExclusive(&si->lock);
++        /* SPURS_WID_TIMELOG=<us>: one line per policy-module run that lasted
++         * at least <us> (1 = all), with its start, length, workload and SPU,
++         * so tools/frame_timeline.py can lay the workloads out in a frame. */
++        extern unsigned long long ps3_qpc_us(void);
++        static long s_wtl = -1;
++        if (s_wtl < 0) { const char* e = getenv("SPURS_WID_TIMELOG"); s_wtl = e ? atol(e) : 0; }
++        const unsigned long long wt0 = s_wtl ? ps3_qpc_us() : 0;
++        FILETIME wc, we, wk0, wu0, wk1, wu1;
++        if (s_wtl) GetThreadTimes(GetCurrentThread(), &wc, &we, &wk0, &wu0);
+         spu_run_policy_module(slot->fn, slot->image_id, slot->pm, slot->pm_size,
+                               slot->data, slot->wid, slot->ea, slot->spu_num);
+         extern SPU_THREAD_LOCAL volatile unsigned g_spurs_pm_polls;
+         unsigned polls = g_spurs_pm_polls;
++        if (s_wtl) {
++            const unsigned long long wd = ps3_qpc_us() - wt0;
++            if (wd >= (unsigned long long)s_wtl) {
++                /* cpu: what the thread used of it (user + kernel), in us */
++                GetThreadTimes(GetCurrentThread(), &wc, &we, &wk1, &wu1);
++                #define FT64(f) (((unsigned long long)(f).dwHighDateTime << 32) | (f).dwLowDateTime)
++                fprintf(stderr, "[wid-time] t=%lluus d=%lluus wid=%u spu=%u polls=%u cpu=%llu+%lluus\n",
++                        wt0, wd, slot->wid, slot->spu_num, polls,
++                        (FT64(wu1) - FT64(wu0)) / 10, (FT64(wk1) - FT64(wk0)) / 10);
++                #undef FT64
++            }
++        }
+         AcquireSRWLockExclusive(&si->lock);
+         u32 wid = slot->wid;
+         if (si->active[wid]) si->active[wid]--;
+diff --git a/libs/video/cellGcmSys.c b/libs/video/cellGcmSys.c
+index 5b28f71..0a7739d 100644
+--- a/libs/video/cellGcmSys.c
++++ b/libs/video/cellGcmSys.c
+@@ -850,6 +850,7 @@ unsigned long long ps3_ms_now(void)
+ }
+ 
+ static u32 s_sema_offset = 0;   /* NV406E semaphore offset (label window) */
++u32 g_gcm_method_ea = 0;        /* guest EA of the method argument being dispatched */
+ /* Backlog past which the drain stops honouring one-flip-per-tick and
+  * catches up instead. Sized well above a frame's command list so a
+  * title that keeps up never sees this path. */
+@@ -985,13 +986,13 @@ static void nv3089_blit(void)
+           if ((poll++ & 63u) == 0) { FILE* g = fopen(gate, "rb"); open_gate = g != NULL; if (g) fclose(g); }
+           if (open_gate) {
+               int _sl = (s_nv3089.src_dma != 0xFEED0001u), _dl = (s_gcm2d.dst_dma != 0xFEED0001u);
+-              printf("[NV3089G] fmt=0x%X out=%ux%u at %u,%u in=%ux%u uv=0x%08X ds=0x%X dt=0x%X src=0x%08X/%u dst=0x%08X/%u swz=%d%c",
++              printf("[NV3089G] fmt=0x%X out=%ux%u at %u,%u in=%ux%u uv=0x%08X ds=0x%X dt=0x%X src=0x%08X/%u dst=0x%08X/%u swz=%d op=%u in_fmt=0x%08X%c",
+                      s_nv3089.fmt & 0xFF, out_w, out_h, out_x, out_y,
+                      s_nv3089.in_sz & 0xFFFF, s_nv3089.in_sz >> 16, s_nv3089.in_uv,
+                      s_nv3089.ds_dx, s_nv3089.dt_dy,
+                      cellGcmResolveLocated(_sl, s_nv3089.in_off), in_pitch,
+                      cellGcmResolveLocated(_dl, s_gcm2d.dst_offset), dst_pitch,
+-                     s_nv309e.active, 10);
++                     s_nv309e.active, s_nv3089.op, s_nv3089.in_fmt, 10);
+           }
+       } }
+     /* A copy out of a surface the live renderer drew exists only on the GPU;
+@@ -1115,11 +1116,31 @@ static void nv3089_blit(void)
+              : (s_gcm2d.color_fmt == 1u /* Y8 */)     ? 1u : 4u;
+     u32 bpp = (sbpp == dbpp) ? sbpp : 4u;
+     if (bpp == 4) nv3089_engine_read(in_pitch, out_w, out_h);
++    /* Unscaled 32-bit rows are one copy each: the pixel loop goes through
++     * vm_read32/vm_write32 (watch, bounds and SPU-reservation checks per word)
++     * and was 9% of the RSX thread in God of War: Ascension's main menu. A row
++     * whose destination holds an SPU reservation keeps the pixel loop, which
++     * breaks it. */
++    extern u8* vm_base;
++    extern int spu_coh_is_reserved(u32 addr);
++    const int row_copy = bpp == 4 && s_nv3089.ds_dx == 0x100000u;
+     for (u32 y = 0; y < out_h; y++) {
+         u32 dy = out_y + y;
+         if (dy < cy0 || dy >= cy1) continue;
+         u64 sv = ((u64)v0 << 8) + (u64)y * s_nv3089.dt_dy;         /* 20.12 */
+         u32 sy = (u32)(sv >> 20);
++        if (row_copy) {
++            if (cx1 <= out_x) continue;
++            const u32 xa = out_x < cx0 ? cx0 - out_x : 0;
++            const u32 xb = (cx1 - out_x < out_w) ? cx1 - out_x : out_w;
++            if (xa >= xb) continue;
++            const u32 sx = (u32)((((u64)u0 << 8) + (u64)xa * s_nv3089.ds_dx) >> 20);
++            const u32 s = src + sy * in_pitch + sx * 4u, d = dst + dy * dst_pitch + (out_x + xa) * 4u;
++            const u32 len = (xb - xa) * 4u;
++            int resv = 0;
++            for (u32 l = d & ~127u; l < d + len && !resv; l += 128u) resv = spu_coh_is_reserved(l);
++            if (!resv) { memmove(vm_base + d, vm_base + s, len); continue; }
++        }
+         for (u32 x = 0; x < out_w; x++) {
+             u32 dx = out_x + x;
+             if (dx < cx0 || dx >= cx1) continue;
+@@ -2107,6 +2128,8 @@ static void gcm_rsx_process_fifo_unlocked(void)
+                  * canonicalises with & 0x1FFC itself. */
+                 { static int live = -1;
+                   if (live < 0) live = rsx_live_draw_enabled();
++                  extern u32 g_gcm_method_ea;
++                  g_gcm_method_ea = dea;   /* where this argument came from (LD_TEXOFF_DBG) */
+                   if (live) rsx_live_draw_method((subch << 13) | m, vm_read32(dea)); }
+ 
+                 /* And into the platform-neutral register-file draw engine,
+diff --git a/libs/video/rsx_fp_decompiler.c b/libs/video/rsx_fp_decompiler.c
+index c5bc3d1..fb93391 100644
+--- a/libs/video/rsx_fp_decompiler.c
++++ b/libs/video/rsx_fp_decompiler.c
+@@ -235,6 +235,61 @@ u64 rsx_fp_structural_hash(const u8* ucode, u32 max_bytes, u64 seed)
+     return 0;
+ }
+ 
++int rsx_fp_uses_wpos(const u8* ucode, u32 max_bytes)
++{
++    if (!ucode) return 0;
++    u32 off = 0;
++    while (off + 16 <= max_bytes) {
++        const u32 w0 = rsx_fp_read_word(ucode + off + 0);
++        const u32 w1 = rsx_fp_read_word(ucode + off + 4);
++        const u32 w2 = rsx_fp_read_word(ucode + off + 8);
++        const u32 w3 = rsx_fp_read_word(ucode + off + 12);
++        off += 16;
++        if (!(w2 & FP_BRANCH) && ((w0 & FP_INPUT_SRC_MASK) >> FP_INPUT_SRC_SHIFT) == 0 &&
++            (((w1 & FP_REG_TYPE_MASK) >> FP_REG_TYPE_SHIFT) == FP_REG_TYPE_INPUT ||
++             ((w2 & FP_REG_TYPE_MASK) >> FP_REG_TYPE_SHIFT) == FP_REG_TYPE_INPUT ||
++             ((w3 & FP_REG_TYPE_MASK) >> FP_REG_TYPE_SHIFT) == FP_REG_TYPE_INPUT))
++            return 1;
++        if (fp_instruction_has_constant(w1, w2, w3)) off += 16;
++        if (w0 & FP_END) return 0;
++    }
++    return 0;
++}
++
++int rsx_fp_apply_shader_window(char* hlsl, u32 out_size, u32 shader_window)
++{
++    static const char from[] = "input.position";
++    static const char to[] = "_rsx_wpos";
++    const u32 height = shader_window & 0xFFFu;
++    const int bottom = ((shader_window >> 12) & 0xFu) == 1u;
++    const int integer = ((shader_window >> 16) & 0xFu) == 1u;
++    if (!bottom && !integer) return 0;
++    char define[160];
++    snprintf(define, sizeof(define),
++             "#define _rsx_wpos float4(input.position.x - %s, %s, input.position.zw)\n",
++             integer ? "0.5" : "0.0",
++             bottom ? (integer ? "%u.0 - input.position.y - 0.5" : "%u.0 - input.position.y")
++                    : (integer ? "input.position.y - 0.5" : "input.position.y"));
++    char line[192];
++    snprintf(line, sizeof(line), define, height);
++    /* count and grow: each read gets shorter, the define is added once */
++    u32 n = 0;
++    for (char* p = strstr(hlsl, from); p; p = strstr(p + 1, from)) n++;
++    if (!n) return 0;
++    const size_t len = strlen(hlsl), dl = strlen(line);
++    if (len + dl + 1 > out_size) return -1;
++    char* w = hlsl;
++    for (const char* r = hlsl; *r;) {
++        if (!strncmp(r, from, sizeof(from) - 1)) {
++            memcpy(w, to, sizeof(to) - 1); w += sizeof(to) - 1; r += sizeof(from) - 1;
++        } else *w++ = *r++;
++    }
++    *w = '\0';
++    memmove(hlsl + dl, hlsl, strlen(hlsl) + 1);
++    memcpy(hlsl, line, dl);
++    return (int)n;
++}
++
+ u64 rsx_fp_literal_source_hash(
+     const u8* ucode, u32 max_bytes, u64 seed)
+ {
+@@ -542,12 +597,40 @@ static void fp_gamma_helper(Out* out)
+         "                  (mask & 8u) ? decoded.a : v.a);\n}\n");
+ }
+ 
++static u32 s_fp_volume_mask;
++void rsx_fp_set_volume_mask(u32 mask) { s_fp_volume_mask = mask; }
++static u32 s_fp_expand_mask;
++void rsx_fp_set_expand_mask(u32 mask) { s_fp_expand_mask = mask; }
++
++/* A sample expanded from [0,1] to [-1,1], as the RSX returns it: either the
++ * unit asks for it (biased remap, s_fp_expand_mask) or the instruction does.
++ * Bit 21 of a texture instruction's OPDEST word is EXP_TEX (RPCS3's
++ * dst.exp_tex): the fetch itself is scaled by 2 and biased by -1. God of War:
++ * Ascension's motion blur reads its velocity buffer (stored as v*0.5+0.5)
++ * that way; without it "at rest" read as 0.5, full speed, and the blur weight
++ * was 1 on every pixel. LD_EXP_TEX=0 ignores the instruction bit. */
++static void fp_expand_sample(char* rhs, size_t cap, u32 unit, u32 exp_tex)
++{
++    static int s_exp_on = -1;
++    if (s_exp_on < 0) { const char* e = getenv("LD_EXP_TEX"); s_exp_on = !(e && e[0] == '0'); }
++    if (!s_exp_on) exp_tex = 0;
++    if ((!exp_tex && !((s_fp_expand_mask >> unit) & 1u)) || !rhs[0]) return;
++    char tmp[700];
++    snprintf(tmp, sizeof(tmp), "(%s * 2.0 - 1.0)", rhs);
++    snprintf(rhs, cap, "%s", tmp);
++}
++
+ static int rsx_fp_decompile_internal(
+     const u8* ucode, u32 max_bytes, u32 ctrl, u32 tex_cube_mask,
+     int buffered, const rsx_fp_shadow_desc* shadow, const u8 gamma_masks[16],
+     char* out, u32 out_size, u32* out_constant_count)
+ {
+     if (!ucode || !out || out_size == 0) return -1;
++    /* Volume units sample like cube units (three coordinates, declared one
++     * by one); per_unit says whether the bank is declared per unit at all. */
++    const u32 vol_mask = s_fp_volume_mask & ~tex_cube_mask;
++    const u32 xyz_mask = tex_cube_mask | vol_mask;
++    const u32 per_unit = xyz_mask;
+     const u32 gamma_units = rsx_fp_texture_gamma_units(ucode, max_bytes, gamma_masks);
+ 
+     const u32 sampled_units = rsx_fp_texture_units(ucode, max_bytes);
+@@ -850,16 +933,17 @@ static int rsx_fp_decompile_internal(
+                 snprintf(rhs, sizeof(rhs), "_rsx_shadow%u((%s).xyz)", tex_unit, a);
+                 break;
+             }
+-            if ((tex_cube_mask >> tex_unit) & 1u)
+-                /* Cubemap: sample with the full 3-component direction vector. */
++            if ((xyz_mask >> tex_unit) & 1u)
++                /* Cubemap or volume: sample with three coordinates. */
+                 snprintf(rhs, sizeof(rhs),
+                          "rsx_tex%u.Sample(rsx_samp[%u], (%s).xyz)", tex_unit, tex_unit, a);
+-            else if (tex_cube_mask)
++            else if (per_unit)
+                 snprintf(rhs, sizeof(rhs),
+                          "rsx_tex%u.Sample(rsx_samp[%u], (%s).xy)", tex_unit, tex_unit, a);
+             else
+                 snprintf(rhs, sizeof(rhs),
+                          "rsx_tex[%u].Sample(rsx_samp[%u], (%s).xy)", tex_unit, tex_unit, a);
++            fp_expand_sample(rhs, sizeof(rhs), tex_unit, (w0 >> 21) & 1u);
+             break;
+         case OP_TXP:
+             if (shadow && shadow[tex_unit].enabled) {
+@@ -871,7 +955,10 @@ static int rsx_fp_decompile_internal(
+                  * the direction directly. */
+                 snprintf(rhs, sizeof(rhs),
+                          "rsx_tex%u.Sample(rsx_samp[%u], (%s).xyz)", tex_unit, tex_unit, a);
+-            else if (tex_cube_mask)
++            else if ((vol_mask >> tex_unit) & 1u)
++                snprintf(rhs, sizeof(rhs),
++                         "rsx_tex%u.Sample(rsx_samp[%u], (%s).xyz / (%s).w)", tex_unit, tex_unit, a, a);
++            else if (per_unit)
+                 snprintf(rhs, sizeof(rhs),
+                          "rsx_tex%u.Sample(rsx_samp[%u], (%s).xy / (%s).w)",
+                          tex_unit, tex_unit, a, a);
+@@ -879,17 +966,19 @@ static int rsx_fp_decompile_internal(
+                 snprintf(rhs, sizeof(rhs),
+                          "rsx_tex[%u].Sample(rsx_samp[%u], (%s).xy / (%s).w)",
+                          tex_unit, tex_unit, a, a);
++            fp_expand_sample(rhs, sizeof(rhs), tex_unit, (w0 >> 21) & 1u);
+             break;
+         case OP_TXB: case OP_TXL: {
+             /* Biased / explicit-LOD sample; bias or LOD is src1.x (RPCS3
+              * TEXTURE_SAMPLE2D_BIAS / _LOD). GH3's fret buttons and fret lines
+              * are TXB: unhandled, they sampled nothing and output alpha 0. */
+-            const int cube = (tex_cube_mask >> tex_unit) & 1u;
++            const int cube = (xyz_mask >> tex_unit) & 1u;
+             char tn[32];
+-            snprintf(tn, sizeof(tn), tex_cube_mask ? "rsx_tex%u" : "rsx_tex[%u]", tex_unit);
++            snprintf(tn, sizeof(tn), per_unit ? "rsx_tex%u" : "rsx_tex[%u]", tex_unit);
+             snprintf(rhs, sizeof(rhs), "%s.%s(rsx_samp[%u], (%s).%s, (%s).x)", tn,
+                      opcode == OP_TXB ? "SampleBias" : "SampleLevel", tex_unit, a,
+                      cube ? "xyz" : "xy", b);
++            fp_expand_sample(rhs, sizeof(rhs), tex_unit, (w0 >> 21) & 1u);
+             break;
+         }
+         case OP_KIL:
+@@ -1101,13 +1190,14 @@ static int rsx_fp_decompile_internal(
+      * array declaration so 2D-only programs are byte-identical. When any unit
+      * is a cubemap, declare each unit individually at its t-register so the
+      * cube units can be TextureCube while the rest stay Texture2D. */
+-    if (tex_cube_mask == 0) {
++    if (per_unit == 0) {
+         out_puts(&p, "Texture2D    rsx_tex[16] : register(t0);\n");
+     } else {
+         char decl[64];
+         for (u32 u = 0; u < 16; u++) {
+             snprintf(decl, sizeof(decl), "%s rsx_tex%u : register(t%u);\n",
+-                     ((tex_cube_mask >> u) & 1u) ? "TextureCube" : "Texture2D  ", u, u);
++                     ((tex_cube_mask >> u) & 1u) ? "TextureCube" :
++                     ((vol_mask >> u) & 1u) ? "Texture3D  " : "Texture2D  ", u, u);
+             out_puts(&p, decl);
+         }
+     }
+diff --git a/libs/video/rsx_fp_decompiler.h b/libs/video/rsx_fp_decompiler.h
+index e012255..62b9ec2 100644
+--- a/libs/video/rsx_fp_decompiler.h
++++ b/libs/video/rsx_fp_decompiler.h
+@@ -152,6 +152,26 @@ int rsx_fp_collect_constants(
+  * malformed input. */
+ u64 rsx_fp_structural_hash(const u8* ucode, u32 max_bytes, u64 seed);
+ 
++/* Nonzero when the program reads WPOS (the fragment's window position), whose
++ * origin and pixel centre SHADER_WINDOW sets. */
++int rsx_fp_uses_wpos(const u8* ucode, u32 max_bytes);
++
++/* Texture units bound to 3D (volume) textures for the next decompile: they
++ * are declared Texture3D and sampled with three coordinates. Set per draw
++ * by the caller, and part of its pipeline identity. */
++void rsx_fp_set_volume_mask(u32 mask);
++
++/* Texture units whose ADDRESS register asks for the biased unsigned remap
++ * (bits 12..15 = 1): the RSX returns sample * 2 - 1. Set per draw like the
++ * volume mask, and part of the caller's pipeline identity. */
++void rsx_fp_set_expand_mask(u32 mask);
++
++/* Rewrite a decompiled program's WPOS reads (SV_Position, top-left origin,
++ * half-pixel centres) into the RSX window position SHADER_WINDOW describes:
++ * bits 0..11 height, 12..15 origin (1 = bottom), 16..19 centre (1 = integer).
++ * Returns the number of reads rewritten, or -1 when out_size is too small. */
++int rsx_fp_apply_shader_window(char* hlsl, u32 out_size, u32 shader_window);
++
+ /* Hash the exact legacy HLSL literal spellings (%g) for a program while also
+  * retaining structural identity. This is intended for aggregate diagnostics;
+  * PSO identity should use rsx_fp_structural_hash in buffered mode. */
+diff --git a/libs/video/rsx_live_draw.c b/libs/video/rsx_live_draw.c
+index 45bfa5c..d3b6a17 100644
+--- a/libs/video/rsx_live_draw.c
++++ b/libs/video/rsx_live_draw.c
+@@ -19,6 +19,7 @@
+  * psdevwiki; RPCS3 as a read-only fact oracle only.
+  */
+ 
++#include <math.h>
+ #include "rsx_live_draw.h"
+ #include "ps3emu/yz_runtime_config.h"
+ #include "ps3emu/yz_frontier_trace.h"
+@@ -101,6 +102,7 @@ static volatile long g_ld_ps1_vram_ready = 0;
+ #include <d3d12.h>
+ #include <d3d12sdklayers.h>
+ #include <dxgi1_4.h>
++#include <dxgi1_6.h>
+ #include <d3dcompiler.h>
+ #include "rsx_vertex_formats.h"
+ #include <sys/stat.h>
+@@ -156,7 +158,13 @@ extern volatile unsigned long long g_yz_auto_start_tick;
+ #define UAV_ZDEPTH_BASE   (SRV_DEPTH_SOURCE_BASE + MAX_SURFACES)
+ /* Per-surface copy a draw samples when it reads its own render target. */
+ #define SRV_FEEDBACK_BASE (UAV_ZDEPTH_BASE + MAX_SURFACES)
+-#define SRV_CPU_HEAP_SLOTS (SRV_FEEDBACK_BASE + MAX_SURFACES)
++/* A zeta's depth packed as the bytes an ARGB8 read of it sees (zdepth_pack). */
++#define SRV_ZPACK_BASE    (SRV_FEEDBACK_BASE + MAX_SURFACES)
++#define UAV_ZPACK_BASE    (SRV_ZPACK_BASE + MAX_SURFACES)
++/* A colour surface read back as Y16_X16_FLOAT (surface_half2_srv). */
++#define SRV_HALF2_BASE    (UAV_ZPACK_BASE + MAX_SURFACES)
++#define UAV_HALF2_BASE    (SRV_HALF2_BASE + MAX_SURFACES)
++#define SRV_CPU_HEAP_SLOTS (UAV_HALF2_BASE + MAX_SURFACES)
+ #define SRV_TABLE_SIZE   16
+ #define SRV_RING_TABLES  4096
+ 
+@@ -202,6 +210,10 @@ typedef struct {
+     u32 w, h;
+     DXGI_FORMAT fmt;
+     ID3D12Resource* fb_tex;   /* feedback copy, see surface_feedback_srv */
++    ID3D12Resource* wb;       /* readback for a guest-read target, see ld_wb_record */
++    ID3D12Resource* half2;    /* R16G16_FLOAT view of its bytes, see surface_half2_srv */
++    u32 half2_w, half2_h;
++    int wb_dirty;
+ #if !defined(YZ_PERF_CLEAN)
+     u32 resource_serial;
+     u32 last_write_generation;
+@@ -237,6 +249,10 @@ typedef struct {
+     u64 depth_write_draws;
+     u64 depth_both_draws;
+     int reject_logged;
++    u32 snapshot_gen;          /* bumped each time the snapshot is refreshed */
++    ID3D12Resource* packed;    /* RGBA8: the depth as an ARGB8 read sees it */
++    u32 packed_w, packed_h, packed_remap, packed_gen;
++    int packed_valid;
+ } zdepth_t;
+ typedef struct {
+     u32 location, offset, format, width, height, pitch, remap;
+@@ -339,6 +355,9 @@ typedef struct {
+     ID3D12RootSignature*       rootsig_x;
+     ID3D12RootSignature*       depth_snapshot_rootsig;
+     ID3D12PipelineState*       depth_snapshot_pso;
++    ID3D12RootSignature*       depth_pack_rootsig;
++    ID3D12PipelineState*       depth_pack_pso;
++    ID3D12PipelineState*       half2_pso;     /* shares depth_pack_rootsig */
+     psocache_t                 psos[MAX_PSOS];
+     u32                        n_psos;
+     shader_blob_cache_t        vs_blobs;
+@@ -443,6 +462,17 @@ typedef struct {
+ 
+ static ld_pso_metadata g_ld_current_pso;
+ static u64 g_ld_flip_requested = 0;
++/* F12 capture (ld_capture_poll) */
++static int   g_ld_cap_active = 0;
++static FILE* g_ld_cap_log = NULL;
++static char  g_ld_cap_dir[MAX_PATH];
++static u32   g_ld_cap_draws = 0;
++static u64   g_ld_cap_keys[512];
++static u32   g_ld_cap_nkeys = 0;
++static void  ld_capture_finish(void);
++/* This title's menu presents irregularly, so a capture ends after a fixed
++ * number of draws (about three menu frames), not at the next present. */
++#define LD_CAPTURE_DRAWS 1200u
+ static u64 g_ld_flip_consumed = 0;
+ static u32 g_ld_last_requested_buffer = UINT32_MAX;
+ static u32 g_ld_last_consumed_buffer = UINT32_MAX;
+@@ -1351,7 +1381,7 @@ typedef struct {
+     u32 color_mask;
+     /* TM: this title renders HDR into FP16 (SURFACE_FORMAT 0xB) targets;
+      * the RTV format is PSO state, so it belongs in the key. */
+-    u32 rt_fp16;
++    u32 rt_dxgi;    /* DXGI format of the colour targets (ld_surface_dxgi) */
+     /* Colour targets the draw writes (SURFACE_COLOR_TARGET: A, AB, ABC,
+      * ABCD). GH3's venue pass writes A and B; the post pass then samples B.
+      * With only A bound, B stayed empty and that pass painted the scene
+@@ -1365,6 +1395,23 @@ typedef struct {
+     u32 bs_func, bs_fail, bs_zfail, bs_zpass;
+ } render_state_t;
+ 
++/* The D3D format of a colour surface. F_X32 is one 32-bit float per pixel:
++ * God of War: Ascension writes its linear view depth there and the depth of
++ * field reads it back as an X32_FLOAT texture. Stored as RGBA8 it clamped to
++ * 0..1 in 8 bits, every pixel read as far away and the whole menu scene came
++ * out blurred. Same 4 bytes a pixel, so readbacks keep their layout. */
++#define RSX_SURFACE_FMT_F_X32 0xD
++static DXGI_FORMAT ld_surface_dxgi(u32 color_format)
++{
++    if (color_format == RSX_SURFACE_FMT_F_W16Z16Y16X16) return DXGI_FORMAT_R16G16B16A16_FLOAT;
++    if (color_format == RSX_SURFACE_FMT_F_X32) {
++        static int on = -1;
++        if (on < 0) { const char* e = getenv("LD_SURF_X32"); on = !(e && e[0] == '0'); }
++        if (on) return DXGI_FORMAT_R32_FLOAT;
++    }
++    return DXGI_FORMAT_R8G8B8A8_UNORM;
++}
++
+ static void decode_render_state(render_state_t* rs)
+ {
+     memset(rs, 0, sizeof(*rs));
+@@ -1374,7 +1421,7 @@ static void decode_render_state(render_state_t* rs)
+     rsx_dsp_surface alpha_surface;
+     rsx_dsp_get_surface(&g.rsx, &alpha_surface);
+     rs->alpha_ref_format = alpha_surface.color_format;
+-    rs->rt_fp16 = alpha_surface.color_format == RSX_SURFACE_FMT_F_W16Z16Y16X16;
++    rs->rt_dxgi = (u32)ld_surface_dxgi(alpha_surface.color_format);
+     rs->rt_count = ld_rt_count(alpha_surface.color_target);
+     rs->blend_enable = rsx_dsp_reg(&g.rsx, M_BLEND_ENABLE) & 1;
+     const u32 sf = rsx_dsp_reg(&g.rsx, M_BLEND_SFACTOR);
+@@ -1713,6 +1760,102 @@ static D3D12_GPU_DESCRIPTOR_HANDLE sampler_table(const u32 slots[SMP_TABLE_SIZE]
+ /* ---------------------------------------------------------------------------
+  * command list submit/wait (simple synchronous model, like the harness)
+  * -----------------------------------------------------------------------*/
++/* A small render target in main memory is a result the CPU or the SPUs read
++ * back: God of War: Ascension draws the scene's average luminance into a 1x1
++ * ARGB8 target at 1:0xAA0000 and its auto exposure reads it from there. The
++ * live renderer never wrote surfaces back, so the exposure ran on whatever
++ * that memory held and the menu came out washed out. At each flush, copy the
++ * targets drawn since the last one into a readback buffer and, once the fence
++ * has passed, store them in guest memory as the RSX would (A, R, G, B bytes).
++ * LD_SURF_WB=0: off. */
++#define LD_WB_MAX_PIXELS 256u
++static int ld_wb_enabled(void)
++{
++    static int on = -1;
++    if (on < 0) { const char* e = getenv("LD_SURF_WB"); on = !(e && e[0] == '0'); }
++    return on;
++}
++
++static void ld_wb_mark(u32 target)
++{
++    if (target >= MAX_SURFACES || !ld_wb_enabled()) return;
++    surface_t* s = &g.surfaces[target];
++    if (s->location == 1 && s->w * s->h <= LD_WB_MAX_PIXELS && s->w <= 64 &&
++        s->fmt == DXGI_FORMAT_R8G8B8A8_UNORM)
++        s->wb_dirty = 1;
++}
++
++static int ld_wb_record(void)
++{
++    int n = 0;
++    for (u32 i = 0; i < g.n_surfaces; i++) {
++        surface_t* s = &g.surfaces[i];
++        if (!s->wb_dirty || !s->tex) continue;
++        if (!s->wb) {
++            D3D12_HEAP_PROPERTIES hp = {0};
++            hp.Type = D3D12_HEAP_TYPE_READBACK;
++            D3D12_RESOURCE_DESC bd = {0};
++            bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
++            bd.Width = 256u * s->h;
++            bd.Height = 1; bd.DepthOrArraySize = 1; bd.MipLevels = 1;
++            bd.Format = DXGI_FORMAT_UNKNOWN; bd.SampleDesc.Count = 1;
++            bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
++            if (FAILED(g.dev->lpVtbl->CreateCommittedResource(
++                    g.dev, &hp, D3D12_HEAP_FLAG_NONE, &bd,
++                    D3D12_RESOURCE_STATE_COPY_DEST, NULL,
++                    &IID_ID3D12Resource, (void**)&s->wb))) {
++                s->wb = NULL;
++                s->wb_dirty = 0;
++                continue;
++            }
++            fprintf(stderr, "[surf-wb] writing back %u:0x%X %ux%u\n", s->location, s->offset, s->w, s->h);
++        }
++        D3D12_RESOURCE_BARRIER b = {0};
++        b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
++        b.Transition.pResource = s->tex;
++        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
++        b.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
++        b.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
++        g.list->lpVtbl->ResourceBarrier(g.list, 1, &b);
++        D3D12_TEXTURE_COPY_LOCATION src = {0}, dst = {0};
++        src.pResource = s->tex; src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
++        dst.pResource = s->wb; dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
++        dst.PlacedFootprint.Footprint.Format = s->fmt;
++        dst.PlacedFootprint.Footprint.Width = s->w;
++        dst.PlacedFootprint.Footprint.Height = s->h;
++        dst.PlacedFootprint.Footprint.Depth = 1;
++        dst.PlacedFootprint.Footprint.RowPitch = 256;
++        g.list->lpVtbl->CopyTextureRegion(g.list, &dst, 0, 0, 0, &src, NULL);
++        b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
++        b.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
++        g.list->lpVtbl->ResourceBarrier(g.list, 1, &b);
++        s->wb_dirty = 2;    /* recorded: write it after this flush's fence */
++        n++;
++    }
++    return n;
++}
++
++static void ld_wb_write(void)
++{
++    for (u32 i = 0; i < g.n_surfaces; i++) {
++        surface_t* s = &g.surfaces[i];
++        if (s->wb_dirty != 2) continue;
++        s->wb_dirty = 0;
++        u8* dst = (u8*)guest_ptr(s->location, s->offset, s->w * s->h * 4u);
++        u8* px = NULL;
++        D3D12_RANGE rr = {0, (SIZE_T)256u * s->h};
++        if (!dst || FAILED(s->wb->lpVtbl->Map(s->wb, 0, &rr, (void**)&px))) continue;
++        for (u32 y = 0; y < s->h; y++)
++            for (u32 x = 0; x < s->w; x++) {
++                const u8* p = px + y * 256u + x * 4u;          /* R, G, B, A */
++                u8* d = dst + (y * s->w + x) * 4u;
++                d[0] = p[3]; d[1] = p[0]; d[2] = p[1]; d[3] = p[2];
++            }
++        D3D12_RANGE wr = {0, 0};
++        s->wb->lpVtbl->Unmap(s->wb, 0, &wr);
++    }
++}
++
+ static void ld_flush(ld_flush_reason reason)
+ {
+ #if defined(YZ_PERF_PROFILE)
+@@ -1722,6 +1865,7 @@ static void ld_flush(ld_flush_reason reason)
+ #else
+     (void)reason;
+ #endif
++    const int wb_pending = ld_wb_record();
+     const HRESULT close_hr = g.list->lpVtbl->Close(g.list);
+     if (FAILED(close_hr)) {
+         fprintf(stderr,
+@@ -1768,6 +1912,7 @@ static void ld_flush(ld_flush_reason reason)
+ #endif
+     }
+     ld_drain_info_queue("flush");
++    if (wb_pending) ld_wb_write();
+     /* Dynamic guest textures can replace a cached D3D resource while an
+      * earlier draw in this command list still references the old one.  The
+      * fence above is the first safe point at which those old resources may be
+@@ -2029,6 +2174,28 @@ static ID3D12Resource* create_texture_rgba(const u8* rgba, u32 w, u32 h)
+     return create_texture_mipped(DXGI_FORMAT_R8G8B8A8_UNORM, &lv, 1);
+ }
+ 
++/* Bytes between two faces of a cubemap in guest memory: a face holds its
++ * whole mip chain as the descriptor counts it (DXT levels down to one 4x4
++ * block each) and the next face starts on a 128-byte boundary, as RPCS3 lays
++ * them out. The decoder used to step by the levels it uploads (it stops DXT
++ * chains at 4x4) with no alignment, so faces 1-5 of God of War: Ascension's
++ * 128x128 eight-level DXT5 reflection cube came from the wrong memory and the
++ * amber rocks reflected garbage over their interior. LD_CUBE_STRIDE=0: old. */
++static u32 cube_face_stride(const rsx_dsp_texture* t, u32 texel_size, u32 block_size, u32 old_span)
++{
++    static int on = -1;
++    if (on < 0) { const char* e = getenv("LD_CUBE_STRIDE"); on = !(e && e[0] == '0'); }
++    if (!on) return old_span;
++    const u32 levels = t->mipmaps ? (t->mipmaps > 14 ? 14 : t->mipmaps) : 1;
++    u32 mw = t->width, mh = t->height, span = 0;
++    for (u32 m = 0; m < levels; m++) {
++        span += block_size ? ((mw + 3) / 4) * ((mh + 3) / 4) * block_size : mw * mh * texel_size;
++        mw = mw > 1 ? mw >> 1 : 1;
++        mh = mh > 1 ? mh >> 1 : 1;
++    }
++    return (span + 127u) & ~127u;
++}
++
+ static u32 texture_source_span(const rsx_dsp_texture* t)
+ {
+     const u32 base_fmt = t->format & TEX_FMT_BASE_MASK & ~(u32)TEX_FMT_UNNORM;
+@@ -2049,6 +2216,9 @@ static u32 texture_source_span(const rsx_dsp_texture* t)
+     case TEX_FMT_DEPTH24_D8: texel_size = 4; break;
+     default: return 0;
+     }
++    if (t->dimension == 3 && linear && !block_size && t->depth && t->depth <= 512 && t->width <= 4096 &&
++        t->height <= 4096)    /* a pitch-linear volume: depth slices, one after another */
++        return (t->pitch ? t->pitch : t->width * texel_size) * t->height * t->depth;
+     if (!t->width || !t->height || t->width > 4096 || t->height > 4096 ||
+         t->dimension != 2)
+         return 0;
+@@ -2088,7 +2258,7 @@ static u32 texture_source_span(const rsx_dsp_texture* t)
+         mw = mw > 1 ? mw >> 1 : 1;
+         mh = mh > 1 ? mh >> 1 : 1;
+     }
+-    return t->cubemap ? span * 6 : span;
++    return t->cubemap ? cube_face_stride(t, texel_size, block_size, span) * 6 : span;
+ }
+ 
+ static u64 texture_content_hash(const rsx_dsp_texture* t, int* readable)
+@@ -2127,8 +2297,22 @@ static u64 texture_content_hash(const rsx_dsp_texture* t, int* readable)
+ 
+     /* One hash per cached texture per presented frame.  Word-at-a-time FNV is
+      * deliberately cheap; this is a mutation detector, not a content ID. */
+-    u64 hash = 1469598103934665603ull;
++    /* Four independent FNV lanes: one chain is bound by the multiply's
++     * latency (~2 bytes a cycle), and God of War: Ascension's main menu
++     * rehashes tens of MB a frame (18% of the RSX thread). The lanes keep the
++     * multipliers busy; values only ever compare against this function's own. */
++    u64 h0 = 1469598103934665603ull, h1 = h0 ^ 0x9E3779B97F4A7C15ull,
++        h2 = h0 ^ 0xC2B2AE3D27D4EB4Full, h3 = h0 ^ 0x165667B19E3779F9ull;
+     u32 i = 0;
++    for (; i + 32 <= span; i += 32) {
++        u64 w[4];
++        memcpy(w, src + i, sizeof(w));
++        h0 = (h0 ^ w[0]) * 1099511628211ull;
++        h1 = (h1 ^ w[1]) * 1099511628211ull;
++        h2 = (h2 ^ w[2]) * 1099511628211ull;
++        h3 = (h3 ^ w[3]) * 1099511628211ull;
++    }
++    u64 hash = h0 ^ (h1 << 17 | h1 >> 47) ^ (h2 << 31 | h2 >> 33) ^ (h3 << 47 | h3 >> 17);
+     for (; i + 8 <= span; i += 8) {
+         u64 word;
+         memcpy(&word, src + i, sizeof(word));
+@@ -2143,11 +2327,129 @@ static u64 texture_content_hash(const rsx_dsp_texture* t, int* readable)
+     return hash;
+ }
+ 
++/* A 3D texture. God of War: Ascension's tone-map pass reads its fog as a
++ * 64x32xN pitch-linear W16Z16Y16X16_FLOAT volume (screen position by depth),
++ * which the 2D-only decoder refused: it sampled white, a full white haze over
++ * the whole frame. Pitch-linear float16 and ARGB8 volumes, identity remap. */
++static ID3D12Resource* decode_guest_volume(const rsx_dsp_texture* t, u32 remap)
++{
++    const u32 base_fmt = t->format & TEX_FMT_BASE_MASK & ~(u32)TEX_FMT_UNNORM;
++    const int linear = (t->format & TEX_FMT_LINEAR) != 0;
++    const u32 w = t->width, h = t->height, d = t->depth;
++    const u32 texel = base_fmt == RSX_TEX_FMT_W16Z16Y16X16_FLOAT ? 8u :
++                      base_fmt == TEX_FMT_A8R8G8B8 ? 4u : 0u;
++    static u32 logs = 0;
++    if (!texel || !linear || !w || !h || !d || w > 2048 || h > 2048 || d > 512 || t->cubemap ||
++        remap != 0xAAE4u) {
++        if (logs++ < 8)
++            fprintf(stderr, "[volume] unsupported %u:0x%X fmt=0x%02X %ux%ux%u remap=0x%X\n",
++                    t->location, t->offset, t->format, w, h, d, remap);
++        return NULL;
++    }
++    const u32 pitch = t->pitch ? t->pitch : w * texel;
++    const u8* src = guest_ptr(t->location, t->offset, pitch * h * d);
++    if (!src) return NULL;
++    const u32 row = w * texel, rows = h * d;
++    u8* texels = (u8*)malloc((size_t)row * rows);
++    if (!texels) return NULL;
++    /* LD_VOLUME_FLIPY=1 flips each slice's rows, LD_VOLUME_LE=1 reads the
++     * halves little-endian, LD_VOLUME_CLAMP=1 turns negative and non-finite
++     * halves into 0: interpretations to test against the PS3 frame (the fog
++     * still leaves black patches on the ground). The first decodes log each
++     * channel's range under both byte orders. */
++    static int flip = -1, le = 0, clampv = 0;
++    if (flip < 0) { const char* e = getenv("LD_VOLUME_FLIPY"); flip = e && e[0] == '1';
++                    e = getenv("LD_VOLUME_LE"); le = e && e[0] == '1';
++                    e = getenv("LD_VOLUME_CLAMP"); clampv = e && e[0] == '1'; }
++    if (texel == 8u && logs < 8) {
++        for (int order = 0; order < 2; order++) {
++            float mn[4] = {1e30f, 1e30f, 1e30f, 1e30f}, mx[4] = {-1e30f, -1e30f, -1e30f, -1e30f};
++            u32 neg[4] = {0}, bad[4] = {0};
++            for (u32 y = 0; y < rows; y++)
++                for (u32 x = 0; x < w; x++)
++                    for (u32 c = 0; c < 4; c++) {
++                        const u8* q = src + (size_t)y * pitch + x * 8u + c * 2u;
++                        const u16 hb = order ? (u16)(q[0] | (q[1] << 8)) : (u16)((q[0] << 8) | q[1]);
++                        const int ex = (hb >> 10) & 0x1F;
++                        if (ex == 31) { bad[c]++; continue; }
++                        float f = ex ? (1.0f + (float)(hb & 0x3FF) / 1024.0f) * ldexpf(1.0f, ex - 15)
++                                     : (float)(hb & 0x3FF) * ldexpf(1.0f, -24);
++                        if (hb & 0x8000) { f = -f; neg[c]++; }
++                        if (f < mn[c]) mn[c] = f;
++                        if (f > mx[c]) mx[c] = f;
++                    }
++            fprintf(stderr, "[volume] %u:0x%X %s: x[%g,%g] y[%g,%g] z[%g,%g] w[%g,%g] neg=%u/%u/%u/%u bad=%u/%u/%u/%u\n",
++                    t->location, t->offset, order ? "LE" : "BE", mn[0], mx[0], mn[1], mx[1], mn[2], mx[2], mn[3], mx[3],
++                    neg[0], neg[1], neg[2], neg[3], bad[0], bad[1], bad[2], bad[3]);
++        }
++    }
++    for (u32 y = 0; y < rows; y++) {
++        const u32 sy = flip ? (y / h) * h + (h - 1u - y % h) : y;
++        const u8* q = src + (size_t)sy * pitch;
++        u8* o = texels + (size_t)y * row;
++        if (texel == 8u)
++            for (u32 x = 0; x < w * 4u; x++) {
++                u8 hi = le ? q[x * 2 + 1] : q[x * 2], lo = le ? q[x * 2] : q[x * 2 + 1];
++                if (clampv && ((hi & 0x80) || (hi & 0x7C) == 0x7C)) hi = lo = 0;
++                o[x * 2] = lo; o[x * 2 + 1] = hi;
++            }
++        else
++            for (u32 x = 0; x < w; x++) {      /* A R G B -> R G B A */
++                o[x * 4] = q[x * 4 + 1]; o[x * 4 + 1] = q[x * 4 + 2];
++                o[x * 4 + 2] = q[x * 4 + 3]; o[x * 4 + 3] = q[x * 4];
++            }
++    }
++    const DXGI_FORMAT fmt = texel == 8u ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_R8G8B8A8_UNORM;
++    D3D12_HEAP_PROPERTIES hp = {0}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
++    D3D12_RESOURCE_DESC rd = {0};
++    rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE3D;
++    rd.Width = w; rd.Height = h; rd.DepthOrArraySize = (UINT16)d;
++    rd.MipLevels = 1; rd.Format = fmt; rd.SampleDesc.Count = 1;
++    ID3D12Resource* tex = NULL;
++    const u32 upitch = (row + 255u) & ~255u;
++    const u32 start = (g.upload_used + 511u) & ~511u;
++    if ((u64)start + (u64)upitch * rows > UPLOAD_SIZE ||
++        FAILED(g.dev->lpVtbl->CreateCommittedResource(g.dev, &hp, D3D12_HEAP_FLAG_NONE, &rd,
++                                                      D3D12_RESOURCE_STATE_COPY_DEST, NULL,
++                                                      &IID_ID3D12Resource, (void**)&tex))) {
++        free(texels);
++        return NULL;
++    }
++    for (u32 y = 0; y < rows; y++)
++        memcpy(g.upload_mapped + start + (size_t)y * upitch, texels + (size_t)y * row, row);
++    free(texels);
++    D3D12_TEXTURE_COPY_LOCATION sl = {0}, dl = {0};
++    sl.pResource = g.upload; sl.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
++    sl.PlacedFootprint.Offset = start;
++    sl.PlacedFootprint.Footprint.Format = fmt;
++    sl.PlacedFootprint.Footprint.Width = w;
++    sl.PlacedFootprint.Footprint.Height = h;
++    sl.PlacedFootprint.Footprint.Depth = d;
++    sl.PlacedFootprint.Footprint.RowPitch = upitch;
++    dl.pResource = tex; dl.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
++    g.list->lpVtbl->CopyTextureRegion(g.list, &dl, 0, 0, 0, &sl, NULL);
++    g.upload_used = start + upitch * rows;
++    D3D12_RESOURCE_BARRIER b = {0};
++    b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION; b.Transition.pResource = tex;
++    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
++    b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
++    b.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
++    g.list->lpVtbl->ResourceBarrier(g.list, 1, &b);
++    if (logs++ < 8)
++        fprintf(stderr, "[volume] %u:0x%X fmt=0x%02X %ux%ux%u\n", t->location, t->offset, t->format, w, h, d);
++    return tex;
++}
++
+ static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
+ {
+     const u32 base_fmt = t->format & TEX_FMT_BASE_MASK & ~(u32)TEX_FMT_UNNORM;
+     const int linear = (t->format & TEX_FMT_LINEAR) != 0;
+     const u32 w = t->width, h = t->height;
++    if (t->dimension == 3) {    /* LD_VOLUME=0: volumes sample white, as before */
++        static int vol_on = -1;
++        if (vol_on < 0) { const char* e = getenv("LD_VOLUME"); vol_on = !(e && e[0] == '0'); }
++        return vol_on ? decode_guest_volume(t, remap) : NULL;
++    }
+     if (!w || !h || w > 4096 || h > 4096 || t->dimension != 2)
+         return NULL;
+     u32 n_mips = t->mipmaps ? t->mipmaps : 1;
+@@ -2220,6 +2522,40 @@ static ID3D12Resource* decode_guest_texture(const rsx_dsp_texture* t, u32 remap)
+         return create_texture_mipped(dxgi, levels, n);
+     }
+ 
++    /* Four big-endian halves per texel, kept as float16 (the RGBA8 path
++     * clamped them to 0..1 and lost the range). God of War: Ascension's tone
++     * map reads a 64x32 one at 1:0x270D700; it fell to white before. Only the
++     * identity remap, which is what it uses; anything else takes the old path. */
++    static int fp16_on = -1;    /* LD_FP16_TEX=0: the old clamped RGBA8 decode */
++    if (fp16_on < 0) { const char* e = getenv("LD_FP16_TEX"); fp16_on = !(e && e[0] == '0'); }
++    if (fp16_on && base_fmt == RSX_TEX_FMT_W16Z16Y16X16_FLOAT && !t->cubemap && (remap & 0xFFu) == 0xE4u &&
++        ((remap >> 8) & 0xFFu) == 0xAAu) {
++        const u32 pitch = linear && t->pitch ? t->pitch : w * 8u;
++        const u8* src = guest_ptr(t->location, t->offset, pitch * h);
++        if (!src) {
++            static u32 logs = 0;
++            if (logs++ < 8)
++                fprintf(stderr, "[fp16-tex] no guest memory for %u:0x%X %ux%u pitch=%u\n",
++                        t->location, t->offset, w, h, pitch);
++            return NULL;
++        }
++        if (!linear && ((w & (w - 1)) || (h & (h - 1)))) return NULL;
++        u8* texels = (u8*)malloc((size_t)w * h * 8u);
++        if (!texels) return NULL;
++        const u32 lw = log2_u32(w), lh = log2_u32(h);
++        for (u32 y = 0; y < h; y++)
++            for (u32 x = 0; x < w; x++) {
++                const u8* q = linear ? src + (size_t)y * pitch + (size_t)x * 8u
++                                     : src + (size_t)morton_index(x, y, lw, lh) * 8u;
++                u8* d = texels + ((size_t)y * w + x) * 8u;
++                for (int c = 0; c < 4; c++) { d[c * 2] = q[c * 2 + 1]; d[c * 2 + 1] = q[c * 2]; }
++            }
++        tex_level_t level = { w, h, texels, w * 8u, h };
++        ID3D12Resource* r = create_texture_mipped(DXGI_FORMAT_R16G16B16A16_FLOAT, &level, 1);
++        free(texels);
++        return r;
++    }
++
+     u32 texel_size;
+     switch (base_fmt) {
+     case TEX_FMT_B8: texel_size = 1; break;
+@@ -2961,6 +3297,7 @@ static u32 surface_get(u32 location, u32 offset, u32 want_w, u32 want_h,
+  * guest VRAM -- empty, so the pass painted the scene black. Snapshot the
+  * target into a per-surface copy and sample that. Returns the SRV slot, or
+  * SRV_WHITE if the copy cannot be made. */
++static void ld_texoff_note(u32 unit, u32 used);   /* LD_TEXOFF_DBG, defined by rsx_live_draw_method */
+ static u32 surface_feedback_srv(u32 slot)
+ {
+     surface_t* s = &g.surfaces[slot];
+@@ -3029,9 +3366,86 @@ static int   s_csv_gate_open;
+ 
+ static int ld_blit_gpu(u32 src_loc, u32 src_abs, u32 src_pitch,
+                        u32 dst_loc, u32 dst_abs, u32 dst_pitch, u32 w, u32 h);
++/* Copy a rectangle of a live surface into guest memory at its own address, in
++ * the RSX's byte order (A, R, G, B). Blocks until the GPU has drawn it. */
++static int ld_surface_to_guest(u32 loc, u32 abs, u32 pitch, u32 w, u32 h)
++{
++    u32 sx, sy;
++    const int si = surface_containing(loc, abs, pitch, w, h, &sx, &sy);
++    if (si < 0 || g.surfaces[si].fmt != DXGI_FORMAT_R8G8B8A8_UNORM) return 0;
++    u8* dst = (u8*)guest_ptr(loc, abs, pitch * (h - 1u) + w * 4u);
++    if (!dst) return 0;
++    surface_t* sf = &g.surfaces[si];
++    const u32 rpitch = (w * 4u + 255u) & ~255u;
++    D3D12_HEAP_PROPERTIES hp = {0}; hp.Type = D3D12_HEAP_TYPE_READBACK;
++    D3D12_RESOURCE_DESC bd = {0};
++    bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; bd.Width = (u64)rpitch * h;
++    bd.Height = 1; bd.DepthOrArraySize = 1; bd.MipLevels = 1;
++    bd.Format = DXGI_FORMAT_UNKNOWN; bd.SampleDesc.Count = 1;
++    bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
++    ID3D12Resource* rb = NULL;
++    if (FAILED(g.dev->lpVtbl->CreateCommittedResource(g.dev, &hp, D3D12_HEAP_FLAG_NONE, &bd,
++            D3D12_RESOURCE_STATE_COPY_DEST, NULL, &IID_ID3D12Resource, (void**)&rb)))
++        return 0;
++    D3D12_RESOURCE_BARRIER b = {0};
++    b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
++    b.Transition.pResource = sf->tex;
++    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
++    b.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
++    b.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
++    g.list->lpVtbl->ResourceBarrier(g.list, 1, &b);
++    D3D12_TEXTURE_COPY_LOCATION src = {0}, dl = {0};
++    src.pResource = sf->tex; src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
++    dl.pResource = rb; dl.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
++    dl.PlacedFootprint.Footprint.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
++    dl.PlacedFootprint.Footprint.Width = w;
++    dl.PlacedFootprint.Footprint.Height = h;
++    dl.PlacedFootprint.Footprint.Depth = 1;
++    dl.PlacedFootprint.Footprint.RowPitch = rpitch;
++    D3D12_BOX box = { sx, sy, 0, sx + w, sy + h, 1 };
++    g.list->lpVtbl->CopyTextureRegion(g.list, &dl, 0, 0, 0, &src, &box);
++    b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
++    b.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
++    g.list->lpVtbl->ResourceBarrier(g.list, 1, &b);
++    ld_flush(LD_FLUSH_READBACK);
++    u8* px = NULL;
++    D3D12_RANGE rr = {0, (SIZE_T)rpitch * h};
++    int ok = 0;
++    if (SUCCEEDED(rb->lpVtbl->Map(rb, 0, &rr, (void**)&px))) {
++        for (u32 y = 0; y < h; y++) {
++            const u8* q = px + (size_t)y * rpitch;
++            u8* o = dst + (size_t)y * pitch;
++            for (u32 x = 0; x < w; x++, q += 4, o += 4) { o[0] = q[3]; o[1] = q[0]; o[2] = q[1]; o[3] = q[2]; }
++        }
++        D3D12_RANGE wr = {0, 0};
++        rb->lpVtbl->Unmap(rb, 0, &wr);
++        ok = 1;
++    }
++    rb->lpVtbl->Release(rb);
++    return ok;
++}
++
+ int rsx_live_draw_blit(u32 src_loc, u32 src_abs, u32 src_pitch,
+                        u32 dst_loc, u32 dst_abs, u32 dst_pitch, u32 w, u32 h)
+ {
++    /* A copy into main memory is for the CPU or the SPUs: God of War:
++     * Ascension copies each finished frame to 0x11AB0000, its SPUs post-process
++     * it (MLAA) and write the result back into VRAM at 0x1D90000, which the
++     * amber materials and the final passes sample. The frame existed only on
++     * the GPU, so the SPUs worked on an empty buffer and every reader of their
++     * output got the white of a cleared surface. Put the source pixels in guest
++     * memory first; cellGcmSys's guest copy then carries them across.
++     * Opt-in (LD_BLIT_TO_GUEST=1): the readback stalls the GPU every frame
++     * (menu 12 -> 8 fps) and showed no visible change yet. */
++    { static int on = -1;
++      if (on < 0) { const char* e = getenv("LD_BLIT_TO_GUEST"); on = e && e[0] == '1'; }
++      if (on && dst_loc == 1u && src_loc == 0u) {
++          const int ok = ld_surface_to_guest(src_loc, src_abs, src_pitch, w, h);
++          static u32 logs = 0;
++          if (logs++ < 4)
++              fprintf(stderr, "[blit-guest] %u:0x%X %ux%u -> main 0x%X: %s\n", src_loc, src_abs, w, h,
++                      dst_abs, ok ? "written" : "no live surface");
++      } }
+     const int r = ld_blit_gpu(src_loc, src_abs, src_pitch, dst_loc, dst_abs, dst_pitch, w, h);
+     if (s_csv_file && s_csv_gate_open) {
+         fprintf(s_csv_file, "#blit,%u,%u:0x%X/%u,%u:0x%X/%u,%ux%u,gpu=%d\n", g_ld_frames,
+@@ -3214,10 +3628,7 @@ static u32 current_surface(void)
+     rsx_dsp_surface sf;
+     rsx_dsp_get_surface(&g.rsx, &sf);
+     return surface_get(sf.color_location[0], sf.color_offset[0],
+-                       sf.clip_w, sf.clip_h,
+-                       sf.color_format == RSX_SURFACE_FMT_F_W16Z16Y16X16
+-                           ? DXGI_FORMAT_R16G16B16A16_FLOAT
+-                           : DXGI_FORMAT_R8G8B8A8_UNORM);
++                       sf.clip_w, sf.clip_h, ld_surface_dxgi(sf.color_format));
+ }
+ 
+ /* On RSX each zeta (depth) address is distinct memory. The offline renderer's
+@@ -3516,9 +3927,198 @@ static int zdepth_snapshot(u32 slot)
+     z->snapshot_state = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+     z->snapshot_valid = 1;
+     z->had_write = 0;
++    z->snapshot_gen++;
++    return 1;
++}
++
++/* A zeta sampled as an ARGB8 texture: the usual PS3 way to read depth in a
++ * post-process (God of War: Ascension's SSAO and fog). The RSX hands the
++ * shader the zeta's memory, each pixel a big-endian D24S8 word, so the A, R
++ * and G bytes are depth bits 23..16, 15..8 and 7..0 and B is stencil; the
++ * shader rebuilds the depth from them. Only DEPTH24_D8 reads were given the
++ * depth snapshot, so these read guest VRAM, which holds nothing the GPU drew:
++ * zeros, and the post-process darkened everything as if it were near. Pack
++ * the snapshot into an RGBA8 texture with those bytes (stencil 0), the
++ * texture's remap applied as decode_texel would, and bind that. Repacked
++ * only when the snapshot or the remap changed. LD_ZPACK=0: off. */
++static int compute_descriptors(u32 src_slot, u32 dst_slot, D3D12_GPU_DESCRIPTOR_HANDLE* out_source,
++                               D3D12_GPU_DESCRIPTOR_HANDLE* out_destination)
++{
++    if (g.srv_ring_used >= SRV_RING_TABLES)
++        return 0;
++    const u32 base = g.srv_ring_used++ * SRV_TABLE_SIZE;
++    D3D12_CPU_DESCRIPTOR_HANDLE cpu;
++    g.srv_heap->lpVtbl->GetCPUDescriptorHandleForHeapStart(g.srv_heap, &cpu);
++    cpu.ptr += (size_t)base * g.srv_step;
++    g.dev->lpVtbl->CopyDescriptorsSimple(g.dev, 1, cpu, srv_cpu(src_slot),
++                                         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
++    cpu.ptr += g.srv_step;
++    g.dev->lpVtbl->CopyDescriptorsSimple(g.dev, 1, cpu, srv_cpu(dst_slot),
++                                         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
++    D3D12_GPU_DESCRIPTOR_HANDLE gpu;
++    g.srv_heap->lpVtbl->GetGPUDescriptorHandleForHeapStart(g.srv_heap, &gpu);
++    gpu.ptr += (u64)base * g.srv_step;
++    *out_source = gpu;
++    gpu.ptr += g.srv_step;
++    *out_destination = gpu;
++    return 1;
++}
++
++static int zdepth_pack(u32 slot, u32 remap)
++{
++    static int s_on = -1;
++    if (s_on < 0) { const char* e = getenv("LD_ZPACK"); s_on = !(e && e[0] == '0'); }
++    if (!s_on || !slot || !g.depth_pack_pso || !g.depth_pack_rootsig) return 0;
++    if (!zdepth_snapshot(slot)) return 0;
++    const u32 i = slot - 1;
++    zdepth_t* z = &g.zdepths[i];
++    if (!z->packed || z->packed_w != z->snapshot_w || z->packed_h != z->snapshot_h) {
++        D3D12_HEAP_PROPERTIES hp = {0};
++        hp.Type = D3D12_HEAP_TYPE_DEFAULT;
++        D3D12_RESOURCE_DESC rd = {0};
++        rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
++        rd.Width = z->snapshot_w;
++        rd.Height = z->snapshot_h;
++        rd.DepthOrArraySize = 1;
++        rd.MipLevels = 1;
++        rd.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
++        rd.SampleDesc.Count = 1;
++        rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
++        ID3D12Resource* tex = NULL;
++        if (FAILED(g.dev->lpVtbl->CreateCommittedResource(
++                g.dev, &hp, D3D12_HEAP_FLAG_NONE, &rd,
++                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, NULL,
++                &IID_ID3D12Resource, (void**)&tex)))
++            return 0;
++        if (z->packed) retire_texture(z->packed);
++        z->packed = tex;
++        z->packed_w = z->snapshot_w;
++        z->packed_h = z->snapshot_h;
++        z->packed_valid = 0;
++        srv_write(SRV_ZPACK_BASE + i, tex);
++        D3D12_UNORDERED_ACCESS_VIEW_DESC ud = {0};
++        ud.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
++        ud.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
++        g.dev->lpVtbl->CreateUnorderedAccessView(g.dev, tex, NULL, &ud, srv_cpu(UAV_ZPACK_BASE + i));
++        fprintf(stderr, "[zetatrack] zpack %u:0x%X %ux%u\n", z->location, z->offset, z->packed_w, z->packed_h);
++    }
++    if (z->packed_valid && z->packed_gen == z->snapshot_gen && z->packed_remap == remap)
++        return 1;
++    D3D12_GPU_DESCRIPTOR_HANDLE src, dst;
++    if (!compute_descriptors(SRV_ZDEPTH_BASE + i, UAV_ZPACK_BASE + i, &src, &dst)) return z->packed_valid;
++
++    D3D12_RESOURCE_BARRIER bars[2] = {0};
++    bars[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
++    bars[0].Transition.pResource = z->snapshot;
++    bars[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
++    bars[0].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
++    bars[0].Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
++    bars[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
++    bars[1].Transition.pResource = z->packed;
++    bars[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
++    bars[1].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
++    bars[1].Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
++    g.list->lpVtbl->ResourceBarrier(g.list, 2, bars);
++
++    ID3D12DescriptorHeap* heaps[] = {g.srv_heap, g.smp_heap};
++    g.list->lpVtbl->SetDescriptorHeaps(g.list, 2, heaps);
++    g.list->lpVtbl->SetPipelineState(g.list, g.depth_pack_pso);
++    g.list->lpVtbl->SetComputeRootSignature(g.list, g.depth_pack_rootsig);
++    g.list->lpVtbl->SetComputeRootDescriptorTable(g.list, 0, src);
++    g.list->lpVtbl->SetComputeRootDescriptorTable(g.list, 1, dst);
++    g.list->lpVtbl->SetComputeRoot32BitConstant(g.list, 2, remap, 0);
++    g.list->lpVtbl->Dispatch(g.list, (z->packed_w + 7u) / 8u, (z->packed_h + 7u) / 8u, 1);
++
++    D3D12_RESOURCE_BARRIER uav_done = {0};
++    uav_done.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
++    uav_done.UAV.pResource = z->packed;
++    g.list->lpVtbl->ResourceBarrier(g.list, 1, &uav_done);
++    bars[0].Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
++    bars[0].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
++    bars[1].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
++    bars[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
++    g.list->lpVtbl->ResourceBarrier(g.list, 2, bars);
++    z->packed_valid = 1;
++    z->packed_gen = z->snapshot_gen;
++    z->packed_remap = remap;
+     return 1;
+ }
+ 
++/* A colour surface sampled as a Y16_X16_FLOAT texture. God of War: Ascension
++ * keeps its post-processing intermediates (luminance, depth-of-field blur
++ * weights) as two float16 values packed into the bytes of ARGB8 targets and
++ * reads them back as Y16_X16_FLOAT. The surface SRV handed the shader those
++ * bytes as four unorm colours instead, so the depth of field and the colour
++ * grade worked on nonsense: the whole menu blurred and washed out, and the
++ * figures in the amber vanished with the sharp layer. Rebuild the halves
++ * from the bytes (x from G:R, y from A:B, as the shader's unpack wrote them)
++ * into an R16G16_FLOAT copy and bind that. LD_HALF2=0: off. */
++static u32 surface_half2_srv(u32 i)
++{
++    static int s_on = -1;
++    if (s_on < 0) { const char* e = getenv("LD_HALF2"); s_on = !(e && e[0] == '0'); }
++    surface_t* sf = &g.surfaces[i];
++    if (!s_on || !g.half2_pso || !sf->tex || sf->fmt != DXGI_FORMAT_R8G8B8A8_UNORM) return 0;
++    if (!sf->half2 || sf->half2_w != sf->w || sf->half2_h != sf->h) {
++        D3D12_HEAP_PROPERTIES hp = {0};
++        hp.Type = D3D12_HEAP_TYPE_DEFAULT;
++        D3D12_RESOURCE_DESC rd = {0};
++        rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
++        rd.Width = sf->w; rd.Height = sf->h;
++        rd.DepthOrArraySize = 1; rd.MipLevels = 1;
++        rd.Format = DXGI_FORMAT_R16G16_FLOAT;
++        rd.SampleDesc.Count = 1;
++        rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
++        ID3D12Resource* tex = NULL;
++        if (FAILED(g.dev->lpVtbl->CreateCommittedResource(
++                g.dev, &hp, D3D12_HEAP_FLAG_NONE, &rd,
++                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, NULL,
++                &IID_ID3D12Resource, (void**)&tex)))
++            return 0;
++        if (sf->half2) retire_texture(sf->half2);
++        sf->half2 = tex; sf->half2_w = sf->w; sf->half2_h = sf->h;
++        srv_write(SRV_HALF2_BASE + i, tex);
++        D3D12_UNORDERED_ACCESS_VIEW_DESC ud = {0};
++        ud.Format = DXGI_FORMAT_R16G16_FLOAT;
++        ud.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
++        g.dev->lpVtbl->CreateUnorderedAccessView(g.dev, tex, NULL, &ud, srv_cpu(UAV_HALF2_BASE + i));
++        fprintf(stderr, "[half2] surface %u:0x%X %ux%u read as Y16_X16_FLOAT\n",
++                sf->location, sf->offset, sf->w, sf->h);
++    }
++    D3D12_GPU_DESCRIPTOR_HANDLE src, dst;
++    if (!compute_descriptors(SRV_SURFACE_BASE + i, UAV_HALF2_BASE + i, &src, &dst)) return 0;
++    D3D12_RESOURCE_BARRIER bars[2] = {0};
++    for (int k = 0; k < 2; k++) {
++        bars[k].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
++        bars[k].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
++    }
++    bars[0].Transition.pResource = sf->tex;
++    bars[0].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
++    bars[0].Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
++    bars[1].Transition.pResource = sf->half2;
++    bars[1].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
++    bars[1].Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
++    g.list->lpVtbl->ResourceBarrier(g.list, 2, bars);
++    ID3D12DescriptorHeap* heaps[] = {g.srv_heap, g.smp_heap};
++    g.list->lpVtbl->SetDescriptorHeaps(g.list, 2, heaps);
++    g.list->lpVtbl->SetPipelineState(g.list, g.half2_pso);
++    g.list->lpVtbl->SetComputeRootSignature(g.list, g.depth_pack_rootsig);
++    g.list->lpVtbl->SetComputeRootDescriptorTable(g.list, 0, src);
++    g.list->lpVtbl->SetComputeRootDescriptorTable(g.list, 1, dst);
++    g.list->lpVtbl->SetComputeRoot32BitConstant(g.list, 2, 0, 0);
++    g.list->lpVtbl->Dispatch(g.list, (sf->w + 7u) / 8u, (sf->h + 7u) / 8u, 1);
++    D3D12_RESOURCE_BARRIER uav_done = {0};
++    uav_done.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
++    uav_done.UAV.pResource = sf->half2;
++    g.list->lpVtbl->ResourceBarrier(g.list, 1, &uav_done);
++    bars[0].Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
++    bars[0].Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
++    bars[1].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
++    bars[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
++    g.list->lpVtbl->ResourceBarrier(g.list, 2, bars);
++    return SRV_HALF2_BASE + i;
++}
++
+ /* ---------------------------------------------------------------------------
+  * PSO cache (VP+FP+render-state keyed)
+  * -----------------------------------------------------------------------*/
+@@ -3742,7 +4342,7 @@ static u64 ld_hash_structural_render_state(
+     LD_HASH_RENDER_FIELD(cull_face);
+     LD_HASH_RENDER_FIELD(front_face);
+     LD_HASH_RENDER_FIELD(color_mask);
+-    LD_HASH_RENDER_FIELD(rt_fp16);
++    LD_HASH_RENDER_FIELD(rt_dxgi);
+     LD_HASH_RENDER_FIELD(rt_count);
+     LD_HASH_RENDER_FIELD(stencil_enable);
+     LD_HASH_RENDER_FIELD(stencil_two_sided);
+@@ -4166,8 +4766,7 @@ static ID3D12PipelineState* build_pso(
+     pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+     pd.NumRenderTargets = rs->rt_count ? rs->rt_count : 1;
+     for (u32 r = 0; r < pd.NumRenderTargets; r++)
+-        pd.RTVFormats[r] = rs->rt_fp16 ? DXGI_FORMAT_R16G16B16A16_FLOAT
+-                                       : DXGI_FORMAT_R8G8B8A8_UNORM;
++        pd.RTVFormats[r] = (DXGI_FORMAT)rs->rt_dxgi;
+     pd.SampleDesc.Count = 1;
+     ID3D12PipelineState* pso = NULL;
+ #if defined(YZ_PERF_PROFILE)
+@@ -4301,13 +4900,27 @@ static ID3D12PipelineState* get_pso(
+     static int ctrl_auto = -1;
+     if (ctrl_auto < 0) ctrl_auto = getenv("RSX_FP_CTRL_AUTO") ? 1 : 0;
+     const u32 fp_ctrl = ctrl_auto ? RSX_FP_CTRL_AUTO : rsx_dsp_shader_control(&g.rsx);
+-    u32 cube_mask = 0;
++    u32 cube_mask = 0, volume_mask = 0, expand_mask = 0;
+     for (u32 unit = 0; unit < RSX_DSP_NUM_TEXTURES; unit++) {
+         rsx_dsp_texture texture;
+         rsx_dsp_get_texture(&g.rsx, unit, &texture);
+         if (texture.enabled && texture.cubemap)
+             cube_mask |= 1u << unit;
+-    }
++        else if (texture.enabled && texture.dimension == 3)
++            volume_mask |= 1u << unit;
++        /* ADDRESS bits 12..15 = 1: CELL_GCM_TEXTURE_UNSIGNED_REMAP_BIASED, the
++         * sample comes back as v * 2 - 1. God of War: Ascension's motion blur
++         * reads its velocity buffer (zero stored as 0.5) that way; read plain,
++         * that was the guess; its ADDRESS is 0x30505 (normal remap), and the
++         * expansion put black patches back on the terrain. LD_TEX_BIAS=1: on. */
++        if (texture.enabled && ((texture.wrap >> 12) & 0xFu) == 1u)
++            expand_mask |= 1u << unit;
++    }
++    { static int on = -1;
++      if (on < 0) { const char* e = getenv("LD_TEX_BIAS"); on = e && e[0] == '1'; }   /* opt-in: it darkened this title's terrain */
++      if (!on) expand_mask = 0; }
++    rsx_fp_set_volume_mask(volume_mask);
++    rsx_fp_set_expand_mask(expand_mask);
+     const u32 vtex_mask = vertex_texture_mask();
+     const u32 txl_mask = vp_txl_unit_mask(vp_uc, vp_instrs);
+     if (txl_mask && !(txl_mask & vtex_mask)) {
+@@ -4357,7 +4970,19 @@ static ID3D12PipelineState* get_pso(
+     }
+     const u32 fp_ctrl_key = fp_ctrl & 0x4Eu;   /* 32-bit exports, depth export */
+     key = fnv1a(&fp_ctrl_key, sizeof(fp_ctrl_key), key);
++    /* WPOS follows SHADER_WINDOW (origin, height, pixel centre), which the
++     * HLSL bakes in. God of War: Ascension's depth linearisation addresses the
++     * zeta by WPOS with a bottom-left origin; read top-left, its linear depth
++     * came out upside down and the depth of field blurred the foreground and
++     * fogged the bottom of the menu. LD_WPOS_RAW=1: the old SV_Position. */
++    static int wpos_raw = -1;
++    if (wpos_raw < 0) wpos_raw = getenv("LD_WPOS_RAW") != NULL;
++    const u32 shader_window = !wpos_raw && rsx_fp_uses_wpos(fp_uc, fp_size)
++        ? rsx_dsp_reg(&g.rsx, 0x1D88u) & 0xFFFFFu : 0u;
++    if (shader_window) key = fnv1a(&shader_window, sizeof(shader_window), key);
+     key = fnv1a(&cube_mask, sizeof(cube_mask), key);
++    if (volume_mask) key = fnv1a(&volume_mask, sizeof(volume_mask), key);
++    if (expand_mask) key = fnv1a(&expand_mask, sizeof(expand_mask), key);
+     key = fnv1a(&vtex_mask, sizeof(vtex_mask), key);
+     /* Texel-addressed (RSX_TEX_FMT_UNNORM) units need their coordinates divided
+      * by the texture size in the shader -- D3D12 has no unnormalised addressing
+@@ -4528,7 +5153,7 @@ static ID3D12PipelineState* get_pso(
+             fi = -1;
+         if (fi > 0) {
+             const int np = rsx_fp_apply_unnorm_scale(
+-                ps_hlsl, sizeof(ps_hlsl), unnorm_mask, unnorm_dim, cube_mask);
++                ps_hlsl, sizeof(ps_hlsl), unnorm_mask, unnorm_dim, cube_mask | volume_mask);
+             { static int n = 0;
+               if (n++ < 8)
+                   fprintf(stderr, "[unnorm] mask=0x%X cube=0x%X dim0=%ux%u"
+@@ -4548,9 +5173,16 @@ static ID3D12PipelineState* get_pso(
+             fi = -1;
+         if (fi > 0 && rsx_fp_apply_unnorm_scale(
+                 ps_hlsl, sizeof(ps_hlsl), unnorm_mask,
+-                unnorm_dim, cube_mask) < 0)
++                unnorm_dim, cube_mask | volume_mask) < 0)
+             fi = -1;
+     }
++    if (fi > 0 && shader_window) {
++        const int nw = rsx_fp_apply_shader_window(ps_hlsl, sizeof(ps_hlsl), shader_window);
++        { static int n = 0;
++          if (n++ < 8)
++              fprintf(stderr, "[wpos] shader_window=0x%05X rewrote %d reads\n", shader_window, nw); }
++        if (nw < 0) fi = -1;
++    }
+ #if defined(YZ_PERF_PROFILE)
+     g_ld_profile.total.decompile_qpc +=
+         (u64)(ld_profile_qpc() - decompile_begin);
+@@ -7137,10 +7769,25 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+                   for (u32 o = dc.inl_off[3] + 3; o < dc.inl_bytes; o += dc.inl_stride)
+                       ((u8*)dc.inl)[o] = 255;
+           } } }
+-    /* LD_SKIP_PSO=<hex key>: drop draws with that CSV pso_key. Debug only. */
+-    { static u64 skipk = 1;
+-      if (skipk == 1) { const char* e = getenv("LD_SKIP_PSO"); skipk = e ? _strtoui64(e, 0, 16) : 0; }
+-      if (skipk && live_legacy_pso_key() == skipk) return; }
++    /* LD_SKIP_PSO=<hex key>[,<hex key>...]: drop draws with those CSV
++     * pso_keys (up to 8). A debugging switch that a title can also default
++     * to work around a pass that is still wrong (see ascension_defaults). */
++    { static u64 skipk[8]; static int nskip = -1;
++      if (nskip < 0) {
++          nskip = 0;
++          const char* e = getenv("LD_SKIP_PSO");
++          while (e && *e && nskip < 8) {
++              char* end = NULL;
++              const u64 k = _strtoui64(e, &end, 16);
++              if (end == e) break;
++              if (k) skipk[nskip++] = k;
++              e = *end == ',' ? end + 1 : end;
++          }
++      }
++      if (nskip) {
++          const u64 k = live_legacy_pso_key();
++          for (int i = 0; i < nskip; i++) if (skipk[i] == k) return;
++      } }
+     /* MRT: colour targets B..D, resolved (and created) here, before any of
+      * this draw's commands are recorded. They share A's format and clip. */
+     u32 mrt[4] = { target, 0, 0, 0 };
+@@ -7152,9 +7799,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+         for (u32 r = 1; r < want; r++) {
+             const u32 s = surface_get(msf.color_location[r], msf.color_offset[r],
+                                       msf.clip_w, msf.clip_h,
+-                                      msf.color_format == RSX_SURFACE_FMT_F_W16Z16Y16X16
+-                                          ? DXGI_FORMAT_R16G16B16A16_FLOAT
+-                                          : DXGI_FORMAT_R8G8B8A8_UNORM);
++                                      ld_surface_dxgi(msf.color_format));
+             if (s == LD_INVALID_SURFACE || s == target) break;
+             mrt[n_mrt++] = s;
+         }
+@@ -7264,7 +7909,12 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+          * depth read: try the zeta first. Before, the colour surface at the
+          * same address was taken (zeros). */
+         int zeta_pref = 0;
+-        if ((t.format & TEX_FMT_BASE_MASK & ~(u32)TEX_FMT_UNNORM) == TEX_FMT_DEPTH24_D8)
++        /* An ARGB8 read of a drawn zeta is a depth read too (zdepth_pack):
++         * prefer the zeta over a colour surface that shares its address. */
++        { static int zpack_on = -1;
++          if (zpack_on < 0) { const char* e = getenv("LD_ZPACK"); zpack_on = !(e && e[0] == '0'); }
++          const u32 bf = t.format & TEX_FMT_BASE_MASK & ~(u32)TEX_FMT_UNNORM;
++          if (bf == TEX_FMT_DEPTH24_D8 || (zpack_on && bf == TEX_FMT_A8R8G8B8))
+             for (u32 i = 0; i < g.n_zdepths; i++)
+                 if (g.zdepths[i].location == t.location &&
+                     g.zdepths[i].offset == t.offset &&
+@@ -7272,12 +7922,72 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+                     zeta_pref = 1;
+                     break;
+                 }
++          /* LD_ZREAD_DBG=1: each distinct texture read at a zeta's address. */
++          static int zread_dbg = -1;
++          if (zread_dbg < 0) zread_dbg = getenv("LD_ZREAD_DBG") != NULL;
++          if (zread_dbg)
++            for (u32 i = 0; i < g.n_zdepths; i++)
++                if (g.zdepths[i].location == t.location && g.zdepths[i].offset == t.offset) {
++                    static u32 seen[64]; static u32 n_seen = 0;
++                    const u32 key = (t.offset & 0xFFFFFF00u) | (t.format & 0xFFu);
++                    int dup = 0;
++                    for (u32 k = 0; k < n_seen; k++) if (seen[k] == key) dup = 1;
++                    if (!dup && n_seen < 64) {
++                        seen[n_seen++] = key;
++                        int surf = -1;
++                        for (u32 k = 0; k < g.n_surfaces; k++)
++                            if (g.surfaces[k].location == t.location && g.surfaces[k].offset == t.offset) surf = (int)k;
++                        fprintf(stderr, "[zread] tex %u:0x%X fmt=0x%02X %ux%u remap=0x%X zeta#%u "
++                                "had_write=%d snap=%d current=%d surf=%d pref=%d\n",
++                                t.location, t.offset, t.format, t.width, t.height, t.remap, i,
++                                g.zdepths[i].had_write, g.zdepths[i].snapshot_valid,
++                                current_zslot == 1 + i, surf, zeta_pref);
++                    }
++                    break;
++                }
++        }
+         if (!zeta_pref) { u32 best_gen = 0;
+           for (u32 i = 0; i < g.n_surfaces; i++) {
+               const surface_t* sf_i = &g.surfaces[i];
+               if (sf_i->location != t.location || sf_i->offset != t.offset ||
+                   i == target)
+                   continue;
++#if !defined(YZ_PERF_CLEAN)
++              /* Never drawn, only cleared, and its memory holds data: written
++               * by the CPU or the SPUs (God of War: Ascension's MLAA output at
++               * 0x1D90000). Sample guest memory, not the cleared surface.
++               * LD_UNDRAWN_GUEST=0: off. */
++              { static int ug = -1;
++                if (ug < 0) { const char* e = getenv("LD_UNDRAWN_GUEST"); ug = !(e && e[0] == '0'); }
++                /* A main-memory surface that only blits ever filled is where
++                 * the SPUs work (0x11AB0000: the frame they post-process and
++                 * whose alpha carries the depth-of-field weights); read what
++                 * they left there, not the GPU's copy from before them. */
++                static int mg = -1;    /* needs LD_BLIT_TO_GUEST=1 to hold the frame */
++                if (mg < 0) { const char* e = getenv("LD_BLIT_TO_GUEST"); mg = e && e[0] == '1'; }
++                if (ug && mg && sf_i->location == 1u && !sf_i->last_draw_generation && (sf_i->last_copy_generation ||
++                    sf_i->last_blit_generation)) {
++                    static u32 mlogs = 0;
++                    if (mlogs++ < 4)
++                        fprintf(stderr, "[undrawn-guest] main 0x%X %ux%u (blit target) sampled from guest memory\n",
++                                sf_i->offset, sf_i->w, sf_i->h);
++                    continue;
++                }
++                if (ug && !sf_i->last_draw_generation && !sf_i->last_copy_generation &&
++                    !sf_i->last_blit_generation) {
++                    const u8* gm = guest_ptr(sf_i->location, sf_i->offset, sf_i->w * 4u * sf_i->h);
++                    int nonzero = 0;
++                    if (gm) for (u32 y = 0; y < sf_i->h && !nonzero; y += sf_i->h / 8u + 1u)
++                        for (u32 x = 0; x < sf_i->w * 4u; x += 64u) if (gm[(size_t)y * sf_i->w * 4u + x]) { nonzero = 1; break; }
++                    if (nonzero) {
++                        static u32 logs = 0;
++                        if (logs++ < 4)
++                            fprintf(stderr, "[undrawn-guest] 0x%X %ux%u sampled from guest memory\n",
++                                    sf_i->offset, sf_i->w, sf_i->h);
++                        continue;
++                    }
++                } }
++#endif
+               if (sf_i->w == t.width && sf_i->h == t.height) { sampled = (int)i; break; }
+               if (sampled < 0 || sf_i->last_draw_generation > best_gen) {
+                   sampled = (int)i;
+@@ -7374,6 +8084,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+         if (sampled < 0 && !zeta_pref && g.surfaces[target].location == t.location &&
+             g.surfaces[target].offset == t.offset) {
+             /* Reads its own render target: sample a copy of it. */
++            if (LD_DIAG_ENABLED("LD_TEXOFF_DBG")) ld_texoff_note(u, t.offset);
+             slots[u] = surface_feedback_srv(target);
+             g_ld_bind_surf++;
+         } else if (sampled >= 0) {
+@@ -7396,7 +8107,9 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+                             g.surfaces[sampled].offset,
+                             g.surfaces[sampled].w, g.surfaces[sampled].h);
+             }
+-            slots[u] = SRV_SURFACE_BASE + sampled;
++            const u32 half2 = (t.format & TEX_FMT_BASE_MASK & ~(u32)TEX_FMT_UNNORM) ==
++                              RSX_TEX_FMT_Y16X16_FLOAT ? surface_half2_srv((u32)sampled) : 0u;
++            slots[u] = half2 ? half2 : SRV_SURFACE_BASE + sampled;
+             g_ld_bind_surf++;
+             int seen = 0;
+             for (u32 k = 0; k < n_surf_used; k++) if (surf_used[k] == (u32)sampled) seen = 1;
+@@ -7438,7 +8151,18 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+                         }
+                         break;
+                     }
+-            if (sampled_depth >= 0) {
++            int packed_depth = -1;
++            if (sampled_depth < 0 && texture_base_fmt == TEX_FMT_A8R8G8B8)
++                for (u32 i = 0; i < g.n_zdepths; i++)
++                    if (g.zdepths[i].location == t.location &&
++                        g.zdepths[i].offset == t.offset &&
++                        (current_zslot != 1 + i || self_zeta_read)) {
++                        if (zdepth_pack(1 + i, t.remap)) packed_depth = (int)i;
++                        break;
++                    }
++            if (packed_depth >= 0) {
++                slots[u] = SRV_ZPACK_BASE + packed_depth;
++            } else if (sampled_depth >= 0) {
+                 slots[u] = SRV_ZDEPTH_BASE + sampled_depth;
+                 g_ld_zdepth_srv_binds++;
+                 int seen = 0;
+@@ -7452,6 +8176,79 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+             }
+         }
+     }
++    /* LD_BIND_TRACE=<target offset hex> [LD_BIND_TRACE_FROM=<frame>,
++     * LD_BIND_TRACE_DIR=<dir>]: for the first 8 draws into that surface from
++     * that frame on, each texture unit (address, format, size, remap) and what
++     * it was bound to, its surface inputs and the target before the draw as
++     * .ppm, and the fragment program with its constants inline as
++     * <dir>/bind_<n>.ps.txt -- what a post-processing pass actually reads.
++     * F12 in the game window (ld_capture_poll) traces every draw of one frame
++     * the same way into captures\cap_<frame>\, the inputs left to the
++     * surface dump taken with it and the target dumped where it changes. */
++    { static long bt_off = -2, bt_from = 0; static u32 bt_n = 0; static const char* bt_dir;
++      if (bt_off == -2) { const char* e = getenv("LD_BIND_TRACE"); bt_off = e ? (long)strtoul(e, 0, 16) : -1;
++                          e = getenv("LD_BIND_TRACE_FROM"); bt_from = e ? atol(e) : 0;
++                          bt_dir = getenv("LD_BIND_TRACE_DIR"); }
++      const int env_hit = bt_off >= 0 && bt_n < 8 && (long)g_ld_frames >= bt_from &&
++          target < g.n_surfaces && g.surfaces[target].offset == (u32)bt_off;
++      const int cap_hit = g_ld_cap_active && g_ld_cap_log && target < g.n_surfaces;
++      if (env_hit || cap_hit) {
++          FILE* out = cap_hit ? g_ld_cap_log : stderr;
++          const char* dir = cap_hit ? g_ld_cap_dir : bt_dir;
++          const u32 n = cap_hit ? g_ld_cap_draws++ : bt_n++;
++          const u64 key = live_legacy_pso_key();
++          fprintf(out, "[bind-trace] #%u frame=%u target %u:0x%X %ux%u pso=%016llx\n", n, g_ld_frames,
++                  g.surfaces[target].location, g.surfaces[target].offset, g.surfaces[target].w,
++                  g.surfaces[target].h, (unsigned long long)key);
++          for (u32 u = 0; u < 16; u++) {
++              rsx_dsp_texture bt; rsx_dsp_get_texture(&g.rsx, u, &bt);
++              if (!bt.enabled) continue;
++              const u32 sl = slots[u];
++              const char* kind = sl == SRV_WHITE ? "white" :
++                  sl >= SRV_HALF2_BASE && sl < SRV_HALF2_BASE + MAX_SURFACES ? "half2" :
++                  sl >= SRV_ZPACK_BASE && sl < SRV_ZPACK_BASE + MAX_SURFACES ? "zpack" :
++                  sl >= SRV_FEEDBACK_BASE && sl < SRV_FEEDBACK_BASE + MAX_SURFACES ? "feedback" :
++                  sl >= SRV_ZDEPTH_BASE && sl < SRV_ZDEPTH_BASE + MAX_SURFACES ? "zdepth" :
++                  sl >= SRV_SURFACE_BASE && sl < SRV_SURFACE_BASE + MAX_SURFACES ? "surface" : "texture";
++              int si = -1;
++              if (!strcmp(kind, "surface")) si = (int)(sl - SRV_SURFACE_BASE);
++              fprintf(out, "[bind-trace]   unit %u %u:0x%X fmt=0x%02X %ux%u remap=0x%X filter=0x%X addr=0x%X dim=%u cube=%u depth=%u mips=%u -> %s",
++                      u, bt.location, bt.offset, bt.format, bt.width, bt.height, bt.remap, bt.filter, bt.wrap, bt.dimension, bt.cubemap, bt.depth, bt.mipmaps, kind);
++              if (si >= 0) fprintf(out, " [%d] 0x%X %ux%u fmt=%d", si, g.surfaces[si].offset,
++                                   g.surfaces[si].w, g.surfaces[si].h, (int)g.surfaces[si].fmt);
++              fprintf(out, "\n");
++              if (!cap_hit && dir && si >= 0) {
++                  char fn[MAX_PATH]; snprintf(fn, sizeof fn, "%s/bind_%u_u%u_%08X.ppm", dir, n, u, g.surfaces[si].offset);
++                  ld_dump_surface_ppm(fn, &g.surfaces[si]);
++              }
++          }
++          static u32 last_target = LD_INVALID_SURFACE;
++          if (dir && (!cap_hit || target != last_target)) {
++              char fn[MAX_PATH]; snprintf(fn, sizeof fn, "%s/bind_%04u_before_%08X.ppm", dir, n, g.surfaces[target].offset);
++              ld_dump_surface_ppm(fn, &g.surfaces[target]);
++          }
++          last_target = target;
++          /* one shader file per program in a capture */
++          int new_key = 1;
++          if (cap_hit) {
++              for (u32 k = 0; k < g_ld_cap_nkeys; k++) if (g_ld_cap_keys[k] == key) new_key = 0;
++              if (new_key && g_ld_cap_nkeys < 512) g_ld_cap_keys[g_ld_cap_nkeys++] = key;
++          }
++          if (dir && new_key) {
++              u32 fl = 0; const u32 fo = rsx_dsp_fragment_program(&g.rsx, &fl);
++              const u8* fp = guest_ptr(fl, fo, 16);
++              const u32 fsz = fp ? rsx_fp_program_size(fp, 0x10000) : 0;
++              fp = fsz ? guest_ptr(fl, fo, fsz) : NULL;
++              static char hl[256 * 1024];
++              if (fp && rsx_fp_decompile_ex(fp, fsz, rsx_dsp_shader_control(&g.rsx), 0u, hl, sizeof(hl)) > 0) {
++                  char fn[MAX_PATH];
++                  if (cap_hit) snprintf(fn, sizeof fn, "%s/pso_%016llx.ps.txt", dir, (unsigned long long)key);
++                  else snprintf(fn, sizeof fn, "%s/bind_%u.ps.txt", dir, n);
++                  FILE* f = fopen(fn, "wb"); if (f) { fputs(hl, f); fclose(f); }
++              }
++          }
++          if (cap_hit && g_ld_cap_draws >= LD_CAPTURE_DRAWS) ld_capture_finish();
++      } }
+ 
+     const u32 vtex_mask = vertex_texture_mask();
+     u32 vtex_slots[SRV_TABLE_SIZE];
+@@ -7665,6 +8462,7 @@ static void sink_end_impl(void* user, const rsx_dispatch* r)
+     ld_surface_note_write(target, LD_SURFACE_WRITE_DRAW);
+     for (u32 r = 1; r < n_mrt; r++)
+         ld_surface_note_write(mrt[r], LD_SURFACE_WRITE_DRAW);
++    ld_wb_mark(target);
+     if (current_zslot) {
+         render_state_t depth_state;
+         decode_render_state(&depth_state);
+@@ -8017,6 +8815,106 @@ static int make_depth_snapshot_pipeline(void)
+     return SUCCEEDED(hr) ? 0 : -1;
+ }
+ 
++static int make_depth_pack_pipeline(void)
++{
++    static const char source[] =
++        "Texture2D<float> depth_source : register(t0);\n"
++        "RWTexture2D<unorm float4> packed : register(u0);\n"
++        "cbuffer remap_cb : register(b0) { uint remap; };\n"
++        "uint pick(uint4 s, uint comp) {\n"
++        "    uint op = (remap >> (8 + comp * 2)) & 3, sel = (remap >> (comp * 2)) & 3;\n"
++        "    return op == 0 ? 0 : (op == 1 ? 255 : s[sel]);\n"
++        "}\n"
++        "[numthreads(8, 8, 1)]\n"
++        "void main(uint3 id : SV_DispatchThreadID) {\n"
++        "    uint w, h;\n"
++        "    packed.GetDimensions(w, h);\n"
++        "    if (id.x >= w || id.y >= h) return;\n"
++        "    uint d = (uint)round(saturate(depth_source.Load(int3(id.xy, 0))) * 16777215.0);\n"
++        "    uint4 s = uint4(d >> 16, (d >> 8) & 255, d & 255, 0);\n"
++        "    packed[id.xy] = float4(pick(s, 1), pick(s, 2), pick(s, 3), pick(s, 0)) / 255.0;\n"
++        "}\n";
++    ID3DBlob* shader = NULL;
++    ID3DBlob* errors = NULL;
++    HRESULT hr = D3DCompile(source, sizeof(source) - 1u, "depth_pack_compute", NULL, NULL,
++                            "main", "cs_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &shader, &errors);
++    if (FAILED(hr)) {
++        fprintf(stderr, "[zetatrack] depth pack shader compile failed hr=0x%08lX: %s\n",
++                (unsigned long)hr,
++                errors ? (const char*)errors->lpVtbl->GetBufferPointer(errors) : "<no diagnostics>");
++        if (errors) errors->lpVtbl->Release(errors);
++        return -1;
++    }
++    if (errors) errors->lpVtbl->Release(errors);
++    D3D12_DESCRIPTOR_RANGE ranges[2] = {0};
++    ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
++    ranges[0].NumDescriptors = 1;
++    ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
++    ranges[1].NumDescriptors = 1;
++    D3D12_ROOT_PARAMETER parameters[3] = {0};
++    for (u32 i = 0; i < 2; ++i) {
++        parameters[i].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
++        parameters[i].DescriptorTable.NumDescriptorRanges = 1;
++        parameters[i].DescriptorTable.pDescriptorRanges = &ranges[i];
++        parameters[i].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
++    }
++    parameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
++    parameters[2].Constants.ShaderRegister = 0;
++    parameters[2].Constants.Num32BitValues = 1;
++    parameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
++    D3D12_ROOT_SIGNATURE_DESC description = {0};
++    description.NumParameters = 3;
++    description.pParameters = parameters;
++    ID3DBlob* serialized = NULL;
++    hr = D3D12SerializeRootSignature(&description, D3D_ROOT_SIGNATURE_VERSION_1, &serialized, NULL);
++    if (FAILED(hr)) { shader->lpVtbl->Release(shader); return -1; }
++    hr = g.dev->lpVtbl->CreateRootSignature(
++        g.dev, 0, serialized->lpVtbl->GetBufferPointer(serialized),
++        serialized->lpVtbl->GetBufferSize(serialized),
++        &IID_ID3D12RootSignature, (void**)&g.depth_pack_rootsig);
++    serialized->lpVtbl->Release(serialized);
++    if (FAILED(hr)) { shader->lpVtbl->Release(shader); return -1; }
++    D3D12_COMPUTE_PIPELINE_STATE_DESC pipeline = {0};
++    pipeline.pRootSignature = g.depth_pack_rootsig;
++    pipeline.CS.pShaderBytecode = shader->lpVtbl->GetBufferPointer(shader);
++    pipeline.CS.BytecodeLength = shader->lpVtbl->GetBufferSize(shader);
++    hr = g.dev->lpVtbl->CreateComputePipelineState(g.dev, &pipeline, &IID_ID3D12PipelineState,
++                                                    (void**)&g.depth_pack_pso);
++    shader->lpVtbl->Release(shader);
++    if (FAILED(hr)) return -1;
++
++    static const char half2_source[] =
++        "Texture2D<float4> bytes_source : register(t0);\n"
++        "RWTexture2D<float2> halves : register(u0);\n"
++        "cbuffer unused_cb : register(b0) { uint unused; };\n"
++        "[numthreads(8, 8, 1)]\n"
++        "void main(uint3 id : SV_DispatchThreadID) {\n"
++        "    uint w, h;\n"
++        "    halves.GetDimensions(w, h);\n"
++        "    if (id.x >= w || id.y >= h) return;\n"
++        "    uint4 b = (uint4)round(saturate(bytes_source.Load(int3(id.xy, 0))) * 255.0);\n"
++        "    halves[id.xy] = float2(f16tof32(b.r | (b.g << 8)), f16tof32(b.b | (b.a << 8)));\n"
++        "}\n";
++    shader = NULL;
++    errors = NULL;
++    hr = D3DCompile(half2_source, sizeof(half2_source) - 1u, "half2_compute", NULL, NULL,
++                    "main", "cs_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &shader, &errors);
++    if (FAILED(hr)) {
++        fprintf(stderr, "[half2] shader compile failed hr=0x%08lX: %s\n", (unsigned long)hr,
++                errors ? (const char*)errors->lpVtbl->GetBufferPointer(errors) : "<no diagnostics>");
++        if (errors) errors->lpVtbl->Release(errors);
++        return 0;    /* the depth pack still works */
++    }
++    if (errors) errors->lpVtbl->Release(errors);
++    pipeline.CS.pShaderBytecode = shader->lpVtbl->GetBufferPointer(shader);
++    pipeline.CS.BytecodeLength = shader->lpVtbl->GetBufferSize(shader);
++    if (FAILED(g.dev->lpVtbl->CreateComputePipelineState(g.dev, &pipeline, &IID_ID3D12PipelineState,
++                                                          (void**)&g.half2_pso)))
++        g.half2_pso = NULL;
++    shader->lpVtbl->Release(shader);
++    return 0;
++}
++
+ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+                        rsx_live_guest_ptr_fn guest_fn, void* guest_user)
+ {
+@@ -8136,7 +9034,29 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+     ld_enable_dred();
+     IDXGIFactory4* factory = NULL;
+     if (FAILED(CreateDXGIFactory1(&IID_IDXGIFactory4, (void**)&factory))) return -1;
+-    if (FAILED(D3D12CreateDevice(NULL, D3D_FEATURE_LEVEL_11_0, &IID_ID3D12Device, (void**)&g.dev))) {
++    /* The high-performance adapter, not the system default: on a laptop or a
++     * desktop with the iGPU enabled the default is often the integrated one.
++     * LD_GPU_LOW_POWER=1 asks for the low-power one instead. Logged, so a run
++     * says which GPU drew it. */
++    {
++        IDXGIFactory6* f6 = NULL;
++        if (SUCCEEDED(factory->lpVtbl->QueryInterface(factory, &IID_IDXGIFactory6, (void**)&f6))) {
++            const DXGI_GPU_PREFERENCE pref = getenv("LD_GPU_LOW_POWER") ? DXGI_GPU_PREFERENCE_MINIMUM_POWER
++                                                                         : DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE;
++            IDXGIAdapter1* ad = NULL;
++            for (UINT i = 0; !g.dev && SUCCEEDED(f6->lpVtbl->EnumAdapterByGpuPreference(
++                                 f6, i, pref, &IID_IDXGIAdapter1, (void**)&ad)); i++) {
++                DXGI_ADAPTER_DESC1 d; ad->lpVtbl->GetDesc1(ad, &d);
++                if (!(d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) &&
++                    SUCCEEDED(D3D12CreateDevice((IUnknown*)ad, D3D_FEATURE_LEVEL_11_0, &IID_ID3D12Device, (void**)&g.dev)))
++                    printf("[rsx] live-draw GPU: %ls (%llu MB VRAM)\n", d.Description,
++                           (unsigned long long)(d.DedicatedVideoMemory >> 20));
++                ad->lpVtbl->Release(ad); ad = NULL;
++            }
++            f6->lpVtbl->Release(f6);
++        }
++    }
++    if (!g.dev && FAILED(D3D12CreateDevice(NULL, D3D_FEATURE_LEVEL_11_0, &IID_ID3D12Device, (void**)&g.dev))) {
+         factory->lpVtbl->Release(factory); return -1;
+     }
+ #if defined(YZ_PERF_PROFILE)
+@@ -8285,6 +9205,8 @@ int rsx_live_draw_init(void* hwnd, u32 width, u32 height,
+     if (make_root_signature() != 0 ||
+         make_depth_snapshot_pipeline() != 0)
+         return -1;
++    if (make_depth_pack_pipeline() != 0)    /* optional: ARGB8 reads of a zeta fall back to VRAM */
++        fprintf(stderr, "[zetatrack] depth pack pipeline unavailable\n");
+ 
+     static const u8 white[4] = {255, 255, 255, 255};
+     g.white_tex = create_texture_rgba(white, 1, 1);
+@@ -8337,8 +9259,52 @@ void rsx_live_draw_set_display_buffer(
+             buffer_id, location, offset, pitch, width, height);
+ }
+ 
++/* LD_TEXOFF_DBG=1: a texture that samples its own render target (a
++ * "feedback" bind) is usually a stale SET_TEXTURE_OFFSET -- a command the
++ * SPUs patch in place, read by us before they did. Keep where each unit's
++ * offset came from in the FIFO, and on a feedback bind print the value we
++ * used next to what that word holds now and two frames later. */
++static u32 g_ld_texoff_ea[16];
++static struct { u32 ea, used, unit, frame, done; } g_ld_texoff_ev[16];
++static u32 g_ld_texoff_n;
++static u32 ld_guest_word(u32 ea)
++{
++    extern uint8_t* vm_base;
++    if (!vm_base || !ea) return 0;
++    const uint8_t* p = vm_base + ea;
++    return ((u32)p[0] << 24) | ((u32)p[1] << 16) | ((u32)p[2] << 8) | p[3];
++}
++static void ld_texoff_note(u32 unit, u32 used)
++{
++    if (unit >= 16) return;
++    const u32 ea = g_ld_texoff_ea[unit];
++    static u32 printed;
++    if (printed++ < 24)
++        fprintf(stderr, "[texoff] frame=%u unit %u feedback: used 0x%08X from FIFO ea 0x%08X, word now 0x%08X\n",
++                g_ld_frames, unit, used, ea, ld_guest_word(ea));
++    if (g_ld_texoff_n < 16) {
++        g_ld_texoff_ev[g_ld_texoff_n].ea = ea; g_ld_texoff_ev[g_ld_texoff_n].used = used;
++        g_ld_texoff_ev[g_ld_texoff_n].unit = unit; g_ld_texoff_ev[g_ld_texoff_n].frame = g_ld_frames;
++        g_ld_texoff_ev[g_ld_texoff_n].done = 0; g_ld_texoff_n++;
++    }
++}
++static void ld_texoff_recheck(void)
++{
++    for (u32 i = 0; i < g_ld_texoff_n; i++)
++        if (!g_ld_texoff_ev[i].done && g_ld_frames >= g_ld_texoff_ev[i].frame + 2) {
++            g_ld_texoff_ev[i].done = 1;
++            fprintf(stderr, "[texoff] recheck (frame %u -> %u) unit %u ea 0x%08X: used 0x%08X, word now 0x%08X\n",
++                    g_ld_texoff_ev[i].frame, g_ld_frames, g_ld_texoff_ev[i].unit, g_ld_texoff_ev[i].ea,
++                    g_ld_texoff_ev[i].used, ld_guest_word(g_ld_texoff_ev[i].ea));
++        }
++}
++
+ void rsx_live_draw_method(u32 method, u32 arg)
+ {
++    { extern u32 g_gcm_method_ea;
++      const u32 c = method & 0x1FFCu;
++      if (c >= 0x1A00u && c < 0x1A00u + 16u * 0x20u && (c & 0x1Fu) == 0)
++          g_ld_texoff_ea[(c - 0x1A00u) >> 5] = g_gcm_method_ea; }
+     /* Bounded ingress trace for the a010 live-vs-capture comparison.  Keep the
+      * raw method (including its FIFO subchannel bits) visible: if an SPU-built
+      * command list binds NV4097 on a different subchannel, feeding the raw
+@@ -8785,6 +9751,39 @@ static u64 ld_dump_surface_ppm(const char* path, const surface_t* surface)
+             for (u32 bi = 0; bi < 16; bi++) fprintf(stderr, " %02X", r0[bi]);
+             fprintf(stderr, "\n");
+         }
++        if (surface->fmt == DXGI_FORMAT_R32_FLOAT) {
++            float vmin = 3.4e38f, vmax = -3.4e38f;
++            for (u32 y = 0; y < height; y++)
++                for (u32 x = 0; x < width; x++) {
++                    float v; memcpy(&v, px + (SIZE_T)y * pitch + x * 4u, 4);
++                    if (v == v && v > -3.0e38f && v < 3.0e38f) {
++                        if (v < vmin) vmin = v;
++                        if (v > vmax) vmax = v;
++                    }
++                }
++            if (!g_ld_record_to) {
++                fprintf(stderr, "[dump-r32] %s min=%g max=%g grid(16x9):\n", path, vmin, vmax);
++                for (u32 gy = 0; gy < 9; gy++) {
++                    fprintf(stderr, "[dump-r32]  ");
++                    for (u32 gx = 0; gx < 16; gx++) {
++                        float v; memcpy(&v, px + (SIZE_T)(gy * height / 9 + height / 18) * pitch +
++                                            (gx * width / 16 + width / 32) * 4u, 4);
++                        fprintf(stderr, " %9.4g", v);
++                    }
++                    fprintf(stderr, "\n");
++                }
++            }
++            const float range = vmax > vmin ? vmax - vmin : 1.0f;
++            for (u32 y = 0; y < height; y++)
++                for (u32 x = 0; x < width; x++) {
++                    u8* pixel = px + (SIZE_T)y * pitch + x * 4u;
++                    float v; memcpy(&v, pixel, 4);
++                    const u8 grey = (v == v) ? (u8)(255.0f * (v < vmin ? 0.0f : v > vmax ? 1.0f : (v - vmin) / range)) : 0;
++                    pixel[0] = pixel[1] = pixel[2] = (v == v) ? grey : 0;
++                    pixel[3] = 255;
++                    if (v != v) pixel[0] = 255;   /* NaN: red */
++                }
++        }
+         FILE* f = g_ld_record_to ? g_ld_record_to : fopen(path, "wb");
+         if (f) {
+             fprintf(f, "P6\n%u %u\n255\n", width, height);
+@@ -9170,9 +10169,81 @@ static void ld_perf_overlay(ID3D12Resource* bb)
+     g.list->lpVtbl->CopyTextureRegion(g.list, &dst, g.width - LD_OVL_W - 8, 8, 0, &src, NULL);
+ }
+ 
++/* F12 while the game window has focus: capture one frame for diagnosis into
++ * <LD_CAPTURE_DIR or captures>\cap_<frame>\ -- every draw of the next frame
++ * with its textures and shader (capture.txt, pso_*.ps.txt), the target before
++ * each pass, then all live surfaces and the presented image. A press during a
++ * capture is ignored. LD_CAPTURE_KEY=0: off. */
++/* End a capture: every live surface and what guest memory holds there. */
++static void ld_capture_finish(void)
++{
++    {
++        g_ld_cap_active = 0;
++        for (u32 i = 0; i < g.n_surfaces; i++) {
++            char path[MAX_PATH * 2];
++            snprintf(path, sizeof(path), "%s\\surf_%02u_%u_%08X_%ux%u.ppm", g_ld_cap_dir, i,
++                     g.surfaces[i].location, g.surfaces[i].offset, g.surfaces[i].w, g.surfaces[i].h);
++            ld_dump_surface_ppm(path, &g.surfaces[i]);
++            /* and what guest memory holds there (A R G B bytes), for buffers
++             * the CPU or SPUs fill */
++            if (g.surfaces[i].fmt == DXGI_FORMAT_R8G8B8A8_UNORM) {
++                const u32 gw = g.surfaces[i].w, gh = g.surfaces[i].h;
++                const u8* gm = guest_ptr(g.surfaces[i].location, g.surfaces[i].offset, gw * 4u * gh);
++                snprintf(path, sizeof(path), "%s\\guest_%02u_%u_%08X_%ux%u.ppm", g_ld_cap_dir, i,
++                         g.surfaces[i].location, g.surfaces[i].offset, gw, gh);
++                FILE* gf = gm ? fopen(path, "wb") : NULL;
++                if (gf) {
++                    fprintf(gf, "P6\n%u %u\n255\n", gw, gh);
++                    for (u32 p = 0; p < gw * gh; p++) fwrite(gm + (size_t)p * 4u + 1u, 1, 3, gf);
++                    fclose(gf);
++                }
++            }
++        }
++        if (g_ld_cap_log) {
++            fprintf(g_ld_cap_log, "[capture] %u draws, %u programs, %u surfaces\n",
++                    g_ld_cap_draws, g_ld_cap_nkeys, g.n_surfaces);
++            fclose(g_ld_cap_log);
++            g_ld_cap_log = NULL;
++        }
++        fprintf(stderr, "[capture] done: %s (%u draws)\n", g_ld_cap_dir, g_ld_cap_draws);
++    }
++}
++
++static void ld_capture_poll(void)
++{
++    static int on = -1;
++    if (on < 0) { const char* e = getenv("LD_CAPTURE_KEY"); on = !(e && e[0] == '0'); }
++    if (!on || g_ld_cap_active) return;    /* a capture ends by draw count (bind trace) */
++    const SHORT k = GetAsyncKeyState(VK_F12);
++    static int was_down = 0;
++    const int down = (k & 0x8000) != 0;
++    const int pressed = down && !was_down;
++    was_down = down;
++    if (!pressed) return;
++    DWORD pid = 0;
++    GetWindowThreadProcessId(GetForegroundWindow(), &pid);
++    if (pid != GetCurrentProcessId()) return;
++    const char* base = getenv("LD_CAPTURE_DIR");
++    if (!base || !base[0]) base = "captures";
++    CreateDirectoryA(base, NULL);
++    snprintf(g_ld_cap_dir, sizeof g_ld_cap_dir, "%s\\cap_%06u", base, g_ld_frames);
++    CreateDirectoryA(g_ld_cap_dir, NULL);
++    char path[MAX_PATH * 2];
++    snprintf(path, sizeof path, "%s\\capture.txt", g_ld_cap_dir);
++    g_ld_cap_log = fopen(path, "w");
++    g_ld_cap_draws = 0;
++    g_ld_cap_nkeys = 0;
++    g_ld_cap_active = g_ld_cap_log != NULL;
++    char full[MAX_PATH];
++    if (!GetFullPathNameA(g_ld_cap_dir, sizeof full, full, NULL)) snprintf(full, sizeof full, "%s", g_ld_cap_dir);
++    fprintf(stderr, "[capture] F12: capturing frame %u into %s\n", g_ld_frames, full);
++}
++
+ void rsx_live_draw_present(u32 buffer_id)
+ {
++    if (g_ld_texoff_n) ld_texoff_recheck();
+     if (!g.ready) return;
++    ld_capture_poll();
+ 
+     /* LD_SURF_DUMP=<dir>: dump EVERY live surface once, with its non-black
+      * count, at LD_SURF_DUMP_FRAME (default 1200).
+@@ -9235,6 +10306,9 @@ void rsx_live_draw_present(u32 buffer_id)
+     if (dump_from < 0) { const char* e = getenv("LD_FRAME_DUMP_FROM"); dump_from = e ? atol(e) : 0; }
+     const int dump_now = dump_every > 0 && (long)g_ld_frames >= dump_from &&
+                          (dump_n++ % (unsigned)dump_every) == 0;
++    static int cap_was_active = 0;     /* the capture's presented image: the first present after it */
++    const int cap_present = cap_was_active && !g_ld_cap_active;
++    cap_was_active = g_ld_cap_active || (cap_was_active && !cap_present ? 0 : 0);
+     /* A flip names a registered display buffer. The current color target may
+      * be an offscreen shadow/postprocess surface at that instant; copying it
+      * caused a010 to present black despite executing the scene's draws. */
+@@ -9267,6 +10341,11 @@ void rsx_live_draw_present(u32 buffer_id)
+         return;
+     }
+     g_ld_last_present_target = target;
++    if (cap_present) {
++        char path[MAX_PATH * 2];
++        snprintf(path, sizeof(path), "%s/presented.ppm", g_ld_cap_dir);
++        ld_dump_surface_ppm(path, &g.surfaces[target]);
++    }
+     if (dump_now) {
+         char path[MAX_PATH * 2];
+         snprintf(path, sizeof(path), "%s\\frame_%06u.ppm", dump_dir, dump_n - 1u);
+@@ -10482,6 +11561,8 @@ void rsx_live_draw_shutdown(void)
+         if (g.zdepths[i].snapshot)
+             g.zdepths[i].snapshot->lpVtbl->Release(
+                 g.zdepths[i].snapshot);
++        if (g.zdepths[i].packed)
++            g.zdepths[i].packed->lpVtbl->Release(g.zdepths[i].packed);
+     }
+     if (g.movie_upload) g.movie_upload->lpVtbl->Release(g.movie_upload);
+     if (g.movie_overlay_readback) g.movie_overlay_readback->lpVtbl->Release(g.movie_overlay_readback);
+diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
+index 4c31ce7..5369fe1 100644
+--- a/runtime/ppu/ppu_loader.cpp
++++ b/runtime/ppu/ppu_loader.cpp
+@@ -1808,7 +1808,20 @@ static void ww_arm_inline_window(uint32_t ww)
+     g_ww_lo = ww & ~15u;
+     g_ww_hi = (ww & ~15u) + len;
+ }
++/* The store watches below cost every guest store a call and a dozen checks
++ * (15% of God of War: Ascension's main thread with none armed). The inline
++ * gate is one load: -1 until the first store reads the environment, then
++ * whether PPU_WVAL or PPU_WWATCH is set. The barrier probe's sync watch is
++ * set at run time and checked on its own. */
++static int s_bw_armed = -1;
++static __attribute__((noinline)) void barrier_watch_hit_slow(uint32_t a, uint32_t v, int width, void* ra);
+ static inline void barrier_watch_hit(uint32_t a, uint32_t v, int width, void* ra)
++{
++    if (__builtin_expect(s_bw_armed == 0, 1) && !g_barrier_sync_watch) return;
++    if (s_bw_armed < 0) s_bw_armed = (getenv("PPU_WVAL") || getenv("PPU_WWATCH")) ? 1 : 0;
++    barrier_watch_hit_slow(a, v, width, ra);
++}
++static __attribute__((noinline)) void barrier_watch_hit_slow(uint32_t a, uint32_t v, int width, void* ra)
+ {
+     /* PPU_WVAL=<hexvalue>: log every PPU store that WRITES this value, wherever
+      * it lands. PPU_WWATCH answers "who writes this address"; when a bad value is
+diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
+index 2027b9b..81ff3d1 100644
+--- a/runtime/ppu/tests/boot_main.cpp
++++ b/runtime/ppu/tests/boot_main.cpp
+@@ -899,6 +899,9 @@ static void prof_hit(int tab, uint64_t key)
+         if (!s_prof_key[tab][i]) { s_prof_key[tab][i] = key; s_prof_ct[tab][i] = 1; return; }
+     }
+ }
++/* "profip": the same, with the exclusive table keyed by the leaf's exact
++ * instruction address, to find the hot spots inside one big function. */
++static int s_prof_ip;
+ static void dbg_prof(DWORD tid, unsigned sec)
+ {
+     /* Suspending ourselves never resumes: the console would hang for good. */
+@@ -919,7 +922,7 @@ static void dbg_prof(DWORD tid, unsigned sec)
+                 DWORD64 base = 0;
+                 PRUNTIME_FUNCTION rf = RtlLookupFunctionEntry(c.Rip, &base, NULL);
+                 uint64_t key = rf ? base + rf->BeginAddress : c.Rip;
+-                if (d == 0) prof_hit(0, key);
++                if (d == 0) prof_hit(0, s_prof_ip ? (uint64_t)c.Rip : key);
+                 /* first exe frame of a sample whose leaf is in a DLL: who called out */
+                 if (!got && (uintptr_t)(key - exe) < 0x40000000u) { got = 1; if (d > 0) prof_hit(2, key); }
+                 int dup = 0; for (int k = 0; k < ns; k++) dup |= seen[k] == key;
+@@ -937,7 +940,7 @@ static void dbg_prof(DWORD tid, unsigned sec)
+     for (int tab = 0; tab < 3; tab++) {
+         static const char* tn[3] = { "exclusive", "inclusive", "exe caller of DLL leaf" };
+         dbg_printf("  --- %s ---%c", tn[tab], 10);
+-        for (int rank = 0; rank < 40; rank++) {
++        for (int rank = 0; rank < (s_prof_ip && tab == 0 ? 200 : 40); rank++) {
+             uint32_t best = 0; int bi = -1;
+             for (int k = 0; k < PROF_SLOTS; k++) if (s_prof_ct[tab][k] > best) { best = s_prof_ct[tab][k]; bi = k; }
+             if (bi < 0) break;
+@@ -1039,7 +1042,8 @@ static DWORD WINAPI debug_console(LPVOID param)
+                 p = end;
+             }
+             dbg_printf("  qbset 0x%08X = %u: %u member(s)%c", a, b, n, 10);
+-        } else if (!strcmp(verb, "prof") && sscanf(cmd, "%*s %u %u", &a, &b) >= 1) {
++        } else if ((!strcmp(verb, "prof") || !strcmp(verb, "profip")) && sscanf(cmd, "%*s %u %u", &a, &b) >= 1) {
++            s_prof_ip = !strcmp(verb, "profip");
+             dbg_prof((DWORD)a, b ? b : 5);
+         } else if (!strcmp(verb, "hle")) {
+             dbg_printf("  last HLE = 0x%08X (%s)%c", g_last_hle_nid,
+diff --git a/runtime/spu/spu_context.h b/runtime/spu/spu_context.h
+index 5ca4e42..d2e043f 100644
+--- a/runtime/spu/spu_context.h
++++ b/runtime/spu/spu_context.h
+@@ -511,7 +511,11 @@ SPU_GATE int g_wws_code_probe = 0;   /* WWS code-buffer resolution, capped
+ SPU_GATE int g_wws_read_probe = 0;
+ static __attribute__((noinline, cold)) void spu_ls_read_probe(const spu_context* ctx, uint32_t lsa)
+ {
+-    if (g_spu_ls_probe < 0) g_spu_ls_probe = getenv("SPU_LS_LOWREAD") ? 1 : 0;
++    /* SPU_LS_LOWREAD and SPU_WWS_RESPROBE share one gate; with neither set an
++     * LS load checks one global (the WWS probe used to cost every load two
++     * context-field compares as well). */
++    if (g_spu_ls_probe < 0) g_spu_ls_probe = (getenv("SPU_LS_LOWREAD") || getenv("SPU_WWS_RESPROBE")) ? 1 : 0;
++    if (!g_spu_ls_probe) return;
+     /* SPU_LS_LOWREAD=1: a job that reads its OWN first bytes as data is
+      * dereferencing a null base -- the job binary loads at LS 0, so [NULL+off]
+      * returns its own instruction words. Report each distinct low address once,
+@@ -536,7 +540,7 @@ static __attribute__((noinline, cold)) void spu_ls_read_probe(const spu_context*
+      * 0xDF0 + (jobNum<<6) + (logBufSet<<2), so the raw address encodes both.
+      * Log them (capped) to see which set each command -- especially RunJob --
+      * resolves to. Uses the RAW lsa before 16-byte alignment masking. */
+-    if (ctx->image_id == 2 && ctx->policy_mode && lsa >= 0xDF0 && lsa < 0xEB0) {
++    if (getenv("SPU_WWS_RESPROBE") && ctx->image_id == 2 && ctx->policy_mode && lsa >= 0xDF0 && lsa < 0xEB0) {
+         extern int g_wws_read_probe;
+         if (g_wws_read_probe < 48) {
+             g_wws_read_probe++;
+@@ -550,7 +554,7 @@ static __attribute__((noinline, cold)) void spu_ls_read_probe(const spu_context*
+ static inline u128 spu_ls_read128(const spu_context* ctx, uint32_t lsa)
+ {
+     u128 v;
+-    if (__builtin_expect(g_spu_ls_probe != 0, 0) || (ctx->image_id == 2 && ctx->policy_mode))
++    if (__builtin_expect(g_spu_ls_probe != 0, 0))
+         spu_ls_read_probe(ctx, lsa);
+     lsa &= SPU_LS_MASK & ~0xFu;
+     const uint8_t* p = &ctx->ls[lsa];
+diff --git a/runtime/spu/spu_drain.c b/runtime/spu/spu_drain.c
+index 4313423..9868098 100644
+--- a/runtime/spu/spu_drain.c
++++ b/runtime/spu/spu_drain.c
+@@ -57,16 +57,81 @@ unsigned spu_recent_pcs(uint32_t* out, unsigned max)
+     return k;
+ }
+ 
++/* SPU_JOB_HIST=3: the same gaps keyed by the lifted function each step ran
++ * (and whatever it called before the next step), printed every 5 s as the
++ * top 40 with their exe RVA: python tools/maprva.py <map> <log> names them. */
++static void spu_fn_hist_step(void* fn)
++{
++    extern unsigned long long ps3_qpc_us(void);
++    enum { FH = 8192 };
++    static void* volatile s_fn[FH];
++    static volatile long long s_us[FH];
++    static volatile unsigned long long s_t0;
++    static _Thread_local unsigned long long t_last;
++    static _Thread_local int t_slot = -1;
++    const unsigned long long now = ps3_qpc_us();
++    if (t_slot >= 0 && now - t_last < 2000)
++        __atomic_add_fetch(&s_us[t_slot], (long long)(now - t_last), __ATOMIC_RELAXED);
++    t_last = now;
++    t_slot = -1;
++    for (unsigned i = (unsigned)(((uintptr_t)fn >> 4) * 2654435761u) % FH, n = 0; n < 64; n++, i = (i + 1) % FH) {
++        void* cur = __atomic_load_n(&s_fn[i], __ATOMIC_RELAXED);
++        if (cur == fn) { t_slot = (int)i; break; }
++        if (!cur) {
++            void* expect = 0;
++            if (__atomic_compare_exchange_n(&s_fn[i], &expect, fn, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED) || expect == fn) {
++                t_slot = (int)i; break;
++            }
++        }
++    }
++    unsigned long long t0 = __atomic_load_n(&s_t0, __ATOMIC_RELAXED);
++    if (!t0) { __atomic_store_n(&s_t0, now, __ATOMIC_RELAXED); return; }
++    if (now - t0 < 5000000ull || !__atomic_compare_exchange_n(&s_t0, &t0, now, 0,
++                                                              __ATOMIC_RELAXED, __ATOMIC_RELAXED))
++        return;
++#ifdef _WIN32
++    extern char __ImageBase;
++    const uintptr_t base = (uintptr_t)&__ImageBase;
++#else
++    const uintptr_t base = 0;
++#endif
++    long long tot = 0;
++    static long long snap[FH];
++    for (int k = 0; k < FH; k++) { snap[k] = __atomic_exchange_n(&s_us[k], 0, __ATOMIC_RELAXED); tot += snap[k]; }
++    fprintf(stderr, "[fn-hist] %.1f ms/s of SPU steps, top functions:\n", tot / 5000.0);
++    for (int r = 0; r < 40; r++) {
++        int best = -1;
++        for (int k = 0; k < FH; k++) if (snap[k] > 0 && (best < 0 || snap[k] > snap[best])) best = k;
++        if (best < 0) break;
++        const uintptr_t f = (uintptr_t)s_fn[best];
++        if (f & 1)
++            fprintf(stderr, "[fn-hist] %7.1f ms/s  indirect to pc=0x%05X ovl=%u\n", snap[best] / 5000.0,
++                    (unsigned)((f >> 1) & SPU_LS_MASK), (unsigned)((uint64_t)f >> 32));
++        else
++            fprintf(stderr, "[fn-hist] %7.1f ms/s  rva=0x%llX\n", snap[best] / 5000.0,
++                    (unsigned long long)(f - base));
++        snap[best] = 0;
++    }
++}
++
+ /* SPU_JOB_HIST=1: SPU time per resident job module (or per image outside
+  * one), from the gaps between trampoline steps on each host thread; gaps over
+  * 2 ms are the thread parked and are dropped. Every 5 s, ms per second each. */
+-static void spu_job_hist_step(const spu_context* ctx)
++static void spu_job_hist_step(const spu_context* ctx, void* fn)
+ {
+     static int s_on = -1;
+-    if (s_on < 0) s_on = getenv("SPU_JOB_HIST") ? 1 : 0;
++    if (s_on < 0) { const char* e = getenv("SPU_JOB_HIST"); s_on = e ? (*e == '2' ? 2 : *e == '3' ? 3 : 1) : 0; }
+     if (!s_on) return;
++    if (s_on == 3) {
++        /* an indirect branch is keyed by where it goes (odd keys: pc, overlay) */
++        if (fn == (void*)spu_indirect_branch)
++            fn = (void*)(uintptr_t)(1u | ((uint64_t)(ctx->pc & SPU_LS_MASK) << 1) |
++                                    ((uint64_t)(uint32_t)ctx->resident_ovl << 32));
++        spu_fn_hist_step(fn);
++        return;
++    }
+     extern unsigned long long ps3_qpc_us(void);
+-    enum { JH = 1024 };
++    enum { JH = 1200 };
+     static volatile long long s_us[JH];
+     static volatile unsigned long long s_t0;
+     static _Thread_local unsigned long long t_last;
+@@ -75,8 +140,10 @@ static void spu_job_hist_step(const spu_context* ctx)
+     if (t_key >= 0 && now - t_last < 2000)
+         __atomic_add_fetch(&s_us[t_key], (long long)(now - t_last), __ATOMIC_RELAXED);
+     t_last = now;
+-    t_key = ctx->resident_ovl > 0 && ctx->resident_ovl < 600 ? ctx->resident_ovl
+-                                                              : 600 + (ctx->image_id & 0xFF);
++    /* SPU_JOB_HIST=2: by the image the step runs in (a code fragment's own
++     * image, 300+), not by the resident job module that called it */
++    t_key = s_on == 1 && ctx->resident_ovl > 0 && ctx->resident_ovl < 600 ? ctx->resident_ovl
++                                                                         : 600 + (ctx->image_id & 0x1FF);
+     unsigned long long t0 = __atomic_load_n(&s_t0, __ATOMIC_RELAXED);
+     if (!t0) { __atomic_store_n(&s_t0, now, __ATOMIC_RELAXED); return; }
+     if (now - t0 < 5000000ull || !__atomic_compare_exchange_n(&s_t0, &t0, now, 0,
+@@ -94,9 +161,18 @@ static void spu_job_hist_step(const spu_context* ctx)
+ 
+ void spu_task_launch_check(spu_context* ctx, void* fn)
+ {
+-    spu_job_hist_step(ctx);
+-    { extern void spu_shadow_check(spu_context*, void (*)(spu_context*));
+-      spu_shadow_check(ctx, (void (*)(spu_context*))fn); }
++    /* Runs on every trampoline step (millions a second), so the diagnostics
++     * share one gate read once from the environment; with none of them set a
++     * step costs the job-end and stack-reset checks below and nothing else. */
++    static int s_diag = -1;
++    if (s_diag < 0)
++        s_diag = (getenv("SPU_JOB_HIST") || getenv("SPU_SHADOW") || getenv("SPU_EXITTRACE") ||
++                  getenv("SPU_STEPTRACE") || getenv("SPU_JOBDRAIN")) ? 1 : 0;
++    if (s_diag) {
++        spu_job_hist_step(ctx, fn);
++        extern void spu_shadow_check(spu_context*, void (*)(spu_context*));
++        spu_shadow_check(ctx, (void (*)(spu_context*))fn);
++    }
+     t_recent[t_recent_n++ & 31] = (uint32_t)ctx->pc & SPU_LS_MASK;
+     extern void spu_check_stack_reset(spu_context*, void (*)(spu_context*));
+     spu_check_stack_reset(ctx, (void (*)(spu_context*))fn);
+@@ -116,7 +192,7 @@ void spu_task_launch_check(spu_context* ctx, void* fn)
+     if (s_et == -2) { const char* e = getenv("SPU_EXITTRACE");
+                       s_et = e ? strtol(e, 0, 0) : -1; }
+     static uint32_t s_ring[64]; static uint32_t s_ri;
+-    if (s_et >= 0 && ctx->image_id == s_et)
++    if (s_diag && s_et >= 0 && ctx->image_id == s_et)
+         s_ring[s_ri++ & 63] = (uint32_t)ctx->pc & SPU_LS_MASK;
+ 
+     if (!s_no_ls0 && ctx->steps++ && (ctx->pc & SPU_LS_MASK) == 0 &&
+@@ -137,6 +213,9 @@ void spu_task_launch_check(spu_context* ctx, void* fn)
+     /* SPU_STEPTRACE=<img>: pc and the argument registers at every trampoline
+      * step. This runs on each drain iteration, so it is the finest-grained
+      * view of a register file changing under a running job. */
++    if (g_pm_flow_ctx == (void*)ctx && g_pm_flow_n < 8192)
++        g_pm_flow_buf[g_pm_flow_n++] = ctx->pc;
++    if (!s_diag) return;
+     { static int64_t s_t = -2;
+       if (s_t == -2) { const char* e = getenv("SPU_STEPTRACE"); s_t = e ? strtol(e,0,0) : -1; }
+       static int64_t s_from = -2;
+@@ -154,8 +233,6 @@ void spu_task_launch_check(spu_context* ctx, void* fn)
+               fflush(stderr);
+           }
+       } }
+-    if (g_pm_flow_ctx == (void*)ctx && g_pm_flow_n < 8192)
+-        g_pm_flow_buf[g_pm_flow_n++] = ctx->pc;
+ 
+     static int s_on = -1;
+     if (s_on < 0) s_on = getenv("SPU_JOBDRAIN") ? 1 : 0;
+diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
+index 5591832..a4c8697 100644
+--- a/runtime/spu/spu_helpers.h
++++ b/runtime/spu/spu_helpers.h
+@@ -385,18 +385,19 @@ static inline u128 spu_selb(u128 a, u128 b, u128 c) { return spu_selb_ref(a, b,
+  * as the byte loop). SPU byte P lives at host byte SPU_W(P), i.e. the bytes
+  * of each 32-bit word reversed, so swap into SPU order, select, swap back. */
+ static inline u128 spu_shufb(u128 a, u128 b, u128 c) {
+-    const __m128i sw = _mm_setr_epi8(3,2,1,0, 7,6,5,4, 11,10,9,8, 15,14,13,12);
++    /* The selector byte for host byte h is c's host byte h (both are SPU byte
++     * h^3), and the SPU byte k it names is host byte k^3 of a or b: so index the
++     * host-order quadwords with (c & 15) ^ 3, no byte-order swaps. Bit 4 picks
++     * b (shifted up to the blend's bit 7). Selectors with bit 7 set are rare. */
+     __m128i A, B, C; memcpy(&A, &a, 16); memcpy(&B, &b, 16); memcpy(&C, &c, 16);
+-    A = _mm_shuffle_epi8(A, sw); B = _mm_shuffle_epi8(B, sw); C = _mm_shuffle_epi8(C, sw);
+-    const __m128i idx = _mm_and_si128(C, _mm_set1_epi8(0x0F));
+-    const __m128i fromb = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8(0x10)), _mm_set1_epi8(0x10));
+-    __m128i r = _mm_blendv_epi8(_mm_shuffle_epi8(A, idx), _mm_shuffle_epi8(B, idx), fromb);
+-    /* Special selectors: 10x -> 0x00, 110 -> 0xFF, 111 -> 0x80. */
+-    const __m128i m80 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0x80)), _mm_set1_epi8((char)0x80));
+-    const __m128i mC0 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0xC0)), _mm_set1_epi8((char)0xC0));
+-    const __m128i mE0 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0xE0)), _mm_set1_epi8((char)0xE0));
+-    const __m128i special = _mm_blendv_epi8(mC0, _mm_set1_epi8((char)0x80), mE0);
+-    r = _mm_shuffle_epi8(_mm_blendv_epi8(r, special, m80), sw);
++    const __m128i idx = _mm_xor_si128(_mm_and_si128(C, _mm_set1_epi8(0x0F)), _mm_set1_epi8(3));
++    __m128i r = _mm_blendv_epi8(_mm_shuffle_epi8(A, idx), _mm_shuffle_epi8(B, idx), _mm_slli_epi16(C, 3));
++    if (__builtin_expect(_mm_movemask_epi8(C) != 0, 0)) {
++        /* Special selectors: 10x -> 0x00, 110 -> 0xFF, 111 -> 0x80. */
++        const __m128i mC0 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0xC0)), _mm_set1_epi8((char)0xC0));
++        const __m128i mE0 = _mm_cmpeq_epi8(_mm_and_si128(C, _mm_set1_epi8((char)0xE0)), _mm_set1_epi8((char)0xE0));
++        r = _mm_blendv_epi8(r, _mm_blendv_epi8(mC0, _mm_set1_epi8((char)0x80), mE0), C);
++    }
+     u128 out; memcpy(&out, &r, 16); return out;
+ }
+ #elif defined(__ARM_NEON)
+@@ -873,6 +874,9 @@ SPU__NV_INLINE u128 spu_fms(u128 a, u128 b, u128 c)  { return spu__nv_fma(a, b,
+ SPU__NV_INLINE u128 spu_fnms(u128 a, u128 b, u128 c) { return spu__nv_fma(a, b, c, 0x80000000u, 0); }  /* c - a*b */
+ #elif defined(__SSE4_1__) && !defined(SPU_SCALAR_HELPERS)
+ #include <smmintrin.h>
++#if defined(__FMA__)
++#include <immintrin.h>
++#endif
+ /* SSE4.1 forms of fa/fs/fm/fma/fms/fnms: the NEON path above, lane for lane, as two f64x2
+  * halves. The same lanes take the fast path; the others are redone one by one by the scalar
+  * path (spu__*_any). Without this every float op on x86 was four scalar lanes behind a call
+@@ -983,7 +987,16 @@ SPU__XS_INLINE u128 spu__xs_fm_exact(u128 a, u128 b) {
+  * possible overflow, or code not running in that mode -- takes the exact path,
+  * in the host's standard mode. tests/test_spu_float_neon.c checks both modes bit
+  * for bit against the scalar references. */
++/* SPU_ASSUME_SPU_FP: the build promises the code runs in the SPU float mode,
++ * so the check is a constant. Lifted code always does (spu_run_with_halt sets
++ * the mode for every run, and the fix-ups restore it after their span); it
++ * saves a stmxcsr and a branch on every float op. Such a build cannot use
++ * SPU_FAST_FP=0 for its lifted code. */
++#if defined(SPU_ASSUME_SPU_FP)
++SPU__XS_INLINE int spu__fp_spu_mode(void) { return 1; }
++#else
+ SPU__XS_INLINE int spu__fp_spu_mode(void) { return (_mm_getcsr() & SPU_MXCSR_SPU_BITS) == SPU_MXCSR_SPU_BITS; }
++#endif
+ /* The vector exact paths do their arithmetic in double where it is exact (a sum
+  * of singles less than 30 binades apart, a product of two singles), so they
+  * hold in either mode; their scalar fix-ups switch to the standard mode. */
+@@ -1050,7 +1063,29 @@ SPU__XS_INLINE u128 spu__xs_fma_exact2(u128 a, u128 b, u128 c, uint32_t negp, ui
+ /* Standard mode: TwoSum and the boundary test. SPU mode: the plain double sum.
+  * Any other mode (rounding bits set some other way) goes the standard way. */
+ SPU__XS_INLINE u128 spu__xs_fma(u128 a, u128 b, u128 c, uint32_t negp, uint32_t negc) {
++#if defined(SPU_ASSUME_SPU_FP)
++    const unsigned csr = SPU_MXCSR_SPU_BITS;
++#else
+     const unsigned csr = _mm_getcsr() & SPU_MXCSR_SPU_BITS;
++#endif
++#if defined(__FMA__)
++    /* SPU mode with FMA3: the SPU's fma is a fused multiply-add truncated once to 24
++     * bits, which vfmadd is under RZ, and DAZ/FTZ read and flush denormals as the SPU
++     * does. One instruction while the exact result stays below 2^128: each operand
++     * below 2^127 (biased exponent <= 253) and the product below 2^127 (exponents
++     * summing to at most 379). */
++    if (csr == SPU_MXCSR_SPU_BITS) {
++        const __m128i x = _mm_xor_si128(spu__xs_ld(a), _mm_set1_epi32((int)negp)), y = spu__xs_ld(b);
++        const __m128i z = _mm_xor_si128(spu__xs_ld(c), _mm_set1_epi32((int)negc));
++        const __m128i ex = spu__xs_bexp(x), ey = spu__xs_bexp(y), lim = _mm_set1_epi32(253);
++        const __m128i big = _mm_or_si128(_mm_or_si128(_mm_cmpgt_epi32(ex, lim), _mm_cmpgt_epi32(ey, lim)),
++                                         _mm_or_si128(_mm_cmpgt_epi32(spu__xs_bexp(z), lim),
++                                                      _mm_cmpgt_epi32(_mm_add_epi32(ex, ey), _mm_set1_epi32(379))));
++        if (_mm_testz_si128(big, big))
++            return spu__xs_st(_mm_castps_si128(spu__xs_pos0f(_mm_fmadd_ps(_mm_castsi128_ps(x), _mm_castsi128_ps(y),
++                                                                          _mm_castsi128_ps(z)))));
++    }
++#endif
+     if (csr == SPU_MXCSR_SPU_BITS) return spu__xs_fma_exact2(a, b, c, negp, negc, 1);
+     if (!csr) return spu__xs_fma_exact2(a, b, c, negp, negc, 0);
+     SPU_FP_STD_BEGIN; const u128 r = spu__xs_fma_exact2(a, b, c, negp, negc, 0); SPU_FP_STD_END; return r;
+@@ -1325,11 +1360,40 @@ static inline u128 spu_rotqbi(u128 a, u128 b){ int sh=b._u32[0]&7; if(!sh) retur
+     uint64_t hi=((uint64_t)a._u32[0]<<32)|a._u32[1], lo=((uint64_t)a._u32[2]<<32)|a._u32[3];
+     uint64_t nhi=(hi<<sh)|(lo>>(64-sh)), nlo=(lo<<sh)|(hi>>(64-sh));
+     u128 r; r._u32[0]=(uint32_t)(nhi>>32); r._u32[1]=(uint32_t)nhi; r._u32[2]=(uint32_t)(nlo>>32); r._u32[3]=(uint32_t)nlo; return r; }
++#if defined(__SSE4_1__) && !defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
++/* Quadword byte rotates and shifts as one pshufb. SPU byte P is host byte P^3,
++ * so the host-order index of the byte that lands at host byte h is
++ * ((h^3) + shift) ^ 3, and a source outside the quadword gets bit 7 (pshufb's
++ * zero). Without these the x86 build ran the byte loops of the _ref forms:
++ * 110-340 instructions each, and rotqby is among the commonest SPU ops (the
++ * unaligned-scalar idiom). tests/test_spu_qby_sse.c checks them against _ref. */
++static inline __m128i spu__x_iota3(void) { return _mm_setr_epi8(3,2,1,0, 7,6,5,4, 11,10,9,8, 15,14,13,12); }
++static inline u128 spu__x_perm(u128 a, __m128i t) {
++    __m128i A; memcpy(&A, &a, 16); A = _mm_shuffle_epi8(A, t); u128 r; memcpy(&r, &A, 16); return r;
++}
++/* SPU byte i <- byte (i + sh) & 15 */
++static inline u128 spu__x_rotby(u128 a, uint32_t sh) {
++    return spu__x_perm(a, _mm_xor_si128(_mm_and_si128(_mm_add_epi8(spu__x_iota3(), _mm_set1_epi8((char)sh)),
++                                                      _mm_set1_epi8(15)), _mm_set1_epi8(3)));
++}
++/* SPU byte i <- byte i + sh, zero past the end (sh 0..31) */
++static inline u128 spu__x_shlby(u128 a, uint32_t sh) {
++    const __m128i v = _mm_add_epi8(spu__x_iota3(), _mm_set1_epi8((char)sh));
++    return spu__x_perm(a, _mm_or_si128(_mm_xor_si128(v, _mm_set1_epi8(3)), _mm_cmpgt_epi8(v, _mm_set1_epi8(15))));
++}
++/* SPU byte i <- byte i - sh, zero before the start (sh 0..31): a negative
++ * index already has bit 7 */
++static inline u128 spu__x_shrby(u128 a, uint32_t sh) {
++    return spu__x_perm(a, _mm_xor_si128(_mm_sub_epi8(spu__x_iota3(), _mm_set1_epi8((char)sh)), _mm_set1_epi8(3)));
++}
++#endif
+ static inline u128 spu_shlqby_ref(u128 a, u128 b){ int sh=b._u32[0]&0x1F; u128 r=spu_zero(); if(sh>=16) return r; for(int i=0;i<16;i++){ int s=i+sh; if(s<16) r._u8[SPU_W(i)]=a._u8[SPU_W(s)]; } return r; }
+ #if defined(__ARM_NEON) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
+ static inline u128 spu_shlqby(u128 a, u128 b) {
+     return spu__perm(a, vaddq_u8(spu__iota(), vdupq_n_u8((uint8_t)(b._u32[0] & 0x1F))));
+ }
++#elif defined(__SSE4_1__) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
++static inline u128 spu_shlqby(u128 a, u128 b) { return spu__x_shlby(a, b._u32[0] & 0x1F); }
+ #else
+ static inline u128 spu_shlqby(u128 a, u128 b) { return spu_shlqby_ref(a, b); }
+ #endif
+@@ -1338,6 +1402,8 @@ static inline u128 spu_rotqby_ref(u128 a, u128 b){ int sh=b._u32[0]&0x0F; u128 r
+ static inline u128 spu_rotqby(u128 a, u128 b) {
+     return spu__perm(a, vandq_u8(vaddq_u8(spu__iota(), vdupq_n_u8((uint8_t)b._u32[0])), vdupq_n_u8(15)));
+ }
++#elif defined(__SSE4_1__) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
++static inline u128 spu_rotqby(u128 a, u128 b) { return spu__x_rotby(a, b._u32[0] & 0x0F); }
+ #else
+ static inline u128 spu_rotqby(u128 a, u128 b) { return spu_rotqby_ref(a, b); }
+ #endif
+@@ -1346,6 +1412,8 @@ static inline u128 spu_shlqbybi_ref(u128 a, u128 b){ int sh=(b._u32[0]>>3)&0x1F;
+ static inline u128 spu_shlqbybi(u128 a, u128 b) {
+     return spu__perm(a, vaddq_u8(spu__iota(), vdupq_n_u8((uint8_t)((b._u32[0] >> 3) & 0x1F))));
+ }
++#elif defined(__SSE4_1__) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
++static inline u128 spu_shlqbybi(u128 a, u128 b) { return spu__x_shlby(a, (b._u32[0] >> 3) & 0x1F); }
+ #else
+ static inline u128 spu_shlqbybi(u128 a, u128 b) { return spu_shlqbybi_ref(a, b); }
+ #endif
+@@ -1354,6 +1422,8 @@ static inline u128 spu_rotqbybi_ref(u128 a, u128 b){ int sh=(b._u32[0]>>3)&0x0F;
+ static inline u128 spu_rotqbybi(u128 a, u128 b) {
+     return spu__perm(a, vandq_u8(vaddq_u8(spu__iota(), vdupq_n_u8((uint8_t)(b._u32[0] >> 3))), vdupq_n_u8(15)));
+ }
++#elif defined(__SSE4_1__) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
++static inline u128 spu_rotqbybi(u128 a, u128 b) { return spu__x_rotby(a, (b._u32[0] >> 3) & 0x0F); }
+ #else
+ static inline u128 spu_rotqbybi(u128 a, u128 b) { return spu_rotqbybi_ref(a, b); }
+ #endif
+@@ -1592,6 +1662,8 @@ static inline u128 spu_rotqmby_ref(u128 a, u128 b)   { int sh=(0-(int)b._u32[0])
+ static inline u128 spu_rotqmby(u128 a, u128 b) {
+     return spu__perm(a, vsubq_u8(spu__iota(), vdupq_n_u8((uint8_t)((0 - (int)b._u32[0]) & 0x1F))));
+ }
++#elif defined(__SSE4_1__) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
++static inline u128 spu_rotqmby(u128 a, u128 b) { return spu__x_shrby(a, (0 - (int)b._u32[0]) & 0x1F); }
+ #else
+ static inline u128 spu_rotqmby(u128 a, u128 b) { return spu_rotqmby_ref(a, b); }
+ #endif
+@@ -1600,6 +1672,8 @@ static inline u128 spu_rotqmbybi_ref(u128 a, u128 b) { int sh=(0-((int)b._u32[0]
+ static inline u128 spu_rotqmbybi(u128 a, u128 b) {
+     return spu__perm(a, vsubq_u8(spu__iota(), vdupq_n_u8((uint8_t)((0 - ((int)b._u32[0] >> 3)) & 0x1F))));
+ }
++#elif defined(__SSE4_1__) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
++static inline u128 spu_rotqmbybi(u128 a, u128 b) { return spu__x_shrby(a, (0 - ((int)b._u32[0] >> 3)) & 0x1F); }
+ #else
+ static inline u128 spu_rotqmbybi(u128 a, u128 b) { return spu_rotqmbybi_ref(a, b); }
+ #endif
+@@ -1612,6 +1686,8 @@ static inline u128 spu_rotqmbyi_ref(u128 a, int i7)  { int sh=(0-i7)&0x1F; u128
+ static inline u128 spu_rotqmbyi(u128 a, int i7) {
+     return spu__perm(a, vsubq_u8(spu__iota(), vdupq_n_u8((uint8_t)((0 - i7) & 0x1F))));
+ }
++#elif defined(__SSE4_1__) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
++static inline u128 spu_rotqmbyi(u128 a, int i7) { return spu__x_shrby(a, (0 - i7) & 0x1F); }
+ #else
+ static inline u128 spu_rotqmbyi(u128 a, int i7) { return spu_rotqmbyi_ref(a, i7); }
+ #endif
+@@ -1911,7 +1987,18 @@ static inline u128 spu_addx(u128 a, u128 b, u128 t) { return spu_addx_ref(a, b,
+ static inline u128 spu_sfx(u128 a, u128 b, u128 t) { return spu_sfx_ref(a, b, t); }
+ static inline u128 spu_cgx(u128 a, u128 b, u128 t) { return spu_cgx_ref(a, b, t); }
+ static inline u128 spu_bgx(u128 a, u128 b, u128 t) { return spu_bgx_ref(a, b, t); }
++#if defined(__SSE4_1__) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
++/* per-byte popcount, a nibble table each half (byte order does not matter) */
++static inline u128 spu_cntb(u128 a) {
++    const __m128i lut = _mm_setr_epi8(0,1,1,2, 1,2,2,3, 1,2,2,3, 2,3,3,4), m = _mm_set1_epi8(0x0F);
++    __m128i x; memcpy(&x, &a, 16);
++    x = _mm_add_epi8(_mm_shuffle_epi8(lut, _mm_and_si128(x, m)),
++                     _mm_shuffle_epi8(lut, _mm_and_si128(_mm_srli_epi16(x, 4), m)));
++    u128 r; memcpy(&r, &x, 16); return r;
++}
++#else
+ static inline u128 spu_cntb(u128 a) { return spu_cntb_ref(a); }
++#endif
+ static inline u128 spu_xsbh(u128 a) { return spu_xsbh_ref(a); }
+ static inline u128 spu_xshw(u128 a) { return spu_xshw_ref(a); }
+ static inline u128 spu_clz(u128 a) { return spu_clz_ref(a); }
+diff --git a/runtime/spu/tests/test_spu_qby_sse.c b/runtime/spu/tests/test_spu_qby_sse.c
+new file mode 100644
+index 0000000..d9e4794
+--- /dev/null
++++ b/runtime/spu/tests/test_spu_qby_sse.c
+@@ -0,0 +1,63 @@
++/* The SSE4.1 quadword byte rotates/shifts and shufb must match their _ref
++ * byte loops for every shift count and selector. Build on x86-64:
++ *   clang-cl -O2 -msse4.1 -I.. -I../.. -I../../.. test_spu_qby_sse.c
++ * and run with no arguments. */
++#include "../spu_helpers.h"
++#include <stdio.h>
++#include <string.h>
++
++static uint64_t s_rng = 0x2545F4914F6CDD1Dull;
++static uint32_t rnd32(void)
++{
++    s_rng ^= s_rng << 13; s_rng ^= s_rng >> 7; s_rng ^= s_rng << 17;
++    return (uint32_t)(s_rng >> 16);
++}
++static u128 rnd128(void) { u128 r; for (int i = 0; i < 4; i++) r._u32[i] = rnd32(); return r; }
++
++static long s_bad;
++static void check(const char* op, u128 got, u128 ref, uint32_t arg)
++{
++    if (memcmp(&got, &ref, 16) == 0) return;
++    if (s_bad++ < 10)
++        printf("%s(arg 0x%08X): got %08X %08X %08X %08X want %08X %08X %08X %08X\n", op, arg,
++               got._u32[0], got._u32[1], got._u32[2], got._u32[3], ref._u32[0], ref._u32[1], ref._u32[2], ref._u32[3]);
++}
++
++int main(void)
++{
++#if !defined(__SSE4_1__)
++    puts("test_spu_qby_sse: no SSE4.1, nothing to compare");
++    return 0;
++#else
++    long n = 0;
++    for (int it = 0; it < 20000; it++) {
++        const u128 a = rnd128();
++        /* every shift count in the low bits, random upper bits (ignored or not) */
++        for (uint32_t k = 0; k < 64; k++) {
++            u128 b = rnd128();
++            b._u32[0] = (it & 1) ? k : (rnd32() & ~0x3FFu) | k;
++            u128 b8 = b; b8._u32[0] = (b._u32[0] & ~0x1FFu) | (k << 3) | (rnd32() & 7);
++            check("shlqby",    spu_shlqby(a, b),    spu_shlqby_ref(a, b),    b._u32[0]);
++            check("rotqby",    spu_rotqby(a, b),    spu_rotqby_ref(a, b),    b._u32[0]);
++            check("rotqmby",   spu_rotqmby(a, b),   spu_rotqmby_ref(a, b),   b._u32[0]);
++            check("shlqbybi",  spu_shlqbybi(a, b8), spu_shlqbybi_ref(a, b8), b8._u32[0]);
++            check("rotqbybi",  spu_rotqbybi(a, b8), spu_rotqbybi_ref(a, b8), b8._u32[0]);
++            check("rotqmbybi", spu_rotqmbybi(a, b8), spu_rotqmbybi_ref(a, b8), b8._u32[0]);
++            check("rotqmbyi",  spu_rotqmbyi(a, (int)k - 32), spu_rotqmbyi_ref(a, (int)k - 32), k);
++            check("rotqmbyi",  spu_rotqmbyi(a, (int)k),      spu_rotqmbyi_ref(a, (int)k), k);
++            n += 8;
++        }
++        /* shufb: random selectors, ordinary ones (< 0x80) and all-special mixes */
++        for (int j = 0; j < 8; j++) {
++            const u128 b = rnd128();
++            u128 c = rnd128();
++            if (j < 4) for (int q = 0; q < 4; q++) c._u32[q] &= 0x1F1F1F1Fu;
++            check("shufb", spu_shufb(a, b, c), spu_shufb_ref(a, b, c), c._u32[0]);
++            check("cntb", spu_cntb(c), spu_cntb_ref(c), c._u32[0]);
++            n += 2;
++        }
++    }
++    printf("test_spu_qby_sse: %s (%ld cases)\n", s_bad ? "FAILED" : "ok", n);
++    return s_bad ? 1 : 0;
++#endif
++}
+diff --git a/tools/spu_lifter.py b/tools/spu_lifter.py
+index 1f933b5..e31288b 100644
+--- a/tools/spu_lifter.py
++++ b/tools/spu_lifter.py
+@@ -498,6 +498,70 @@ def compute_link_returns(insns, bounds) -> set:
+ # set as find_spu_functions.LV2_RESUMING_STOPS, which decides function extents).
+ LV2_RESUMING_STOPS = {0x100, 0x110, 0x111}
+ 
++_GPR_RE = re.compile(r"ctx->gpr\[(\d+)\]")
++# A line is "pure" when ctx appears in it only as a register or as the LS
++# accessors' first argument: those touch neither ctx->gpr nor anything that
++# reads it (the LS watch diagnostic reads r0, and sees it as of the last
++# flush). Anything else -- a channel op, a call, ctx->pc, a stop -- may read
++# or write the register file.
++_PURE_CTX_RE = re.compile(r"ctx->gpr\[\d+\]|spu_ls_(?:read|write)128\(ctx,")
++_ASSIGN_RE = re.compile(r"ctx->gpr\[(\d+)\]\s*=(?!=)")
++# `{ ctx->pc = ...; g_spu_trampoline_fn = ...; return; }`, alone or behind an if
++_EXIT_BLOCK_RE = re.compile(r"^(if \(.*\) )?\{ (ctx->pc = [^;]+; g_spu_trampoline_fn = [^;]+; return;) \}$")
++
++
++def promote_registers(body_lines: list) -> list:
++    """Keep the SPU registers of one lifted function in C locals.
++
++    Lifted code reads and writes ctx->gpr[n] for every instruction, and the LS
++    stores go through byte pointers, which may alias the register file: the
++    compiler has to keep all of it in memory, a load and a store per operand.
++    Here each register the function uses lives in a local `_gN`, loaded on
++    entry. The registers it writes go back to ctx->gpr on every way out -- a
++    tail transfer, a return, a call or anything else that is handed ctx --
++    and after such a call all of them are read back. Exits taken from inside
++    an `if` flush only on the taken path, so a loop's conditional exit costs
++    nothing while the loop runs.
++    """
++    def pure(line):
++        return "ctx" not in _PURE_CTX_RE.sub("", line) and "return" not in line
++
++    used, written = set(), set()
++    for b in body_lines:
++        if b.endswith(":"):
++            continue
++        used.update(int(n) for n in _GPR_RE.findall(b))
++        written.update(int(n) for n in _ASSIGN_RE.findall(b))
++    if not used:
++        return body_lines
++    loc = lambda s: _GPR_RE.sub(lambda m: f"_g{m.group(1)}", s)
++    flush = " ".join(f"ctx->gpr[{n}] = _g{n};" for n in sorted(written))
++    reload_all = " ".join(f"_g{n} = ctx->gpr[{n}];" for n in sorted(used))
++    out = [f"u128 {', '.join(f'_g{n} = ctx->gpr[{n}]' for n in sorted(used))};"]
++    for b in body_lines:
++        b = b.strip()
++        if b.endswith(":"):
++            out.append(b)
++            continue
++        if pure(b):
++            out.append(loc(b))
++            continue
++        m = _EXIT_BLOCK_RE.match(b)
++        if m:   # the exit reads no register (ctx->pc is a constant): flush inside
++            cond = loc(m.group(1) or "")
++            out.append(f"{cond}{{ {flush} {m.group(2)} }}")
++            continue
++        if b.strip() in ("SPU_RET(ctx);",) or b.startswith("SPU_RET_REG(ctx,"):
++            out.append(f"{{ {flush} {b} }}")
++            continue
++        # Anything else runs on ctx->gpr itself, between a flush and a reload.
++        # A line that only returns needs no reload, but it does no harm; one
++        # that jumps to a label inside the function reloads before the jump.
++        b = re.sub(r"\bgoto (loc_[0-9A-F]+);", lambda m: f"{{ {reload_all} goto {m.group(1)}; }}", b)
++        out.append(f"{{ {flush} {b} {reload_all} }}")
++    return out
++
++
+ class SPULifter:
+     def __init__(self, trace: bool = False, prefix: str = ""):
+         self.functions: list[LiftedFunction] = []
+@@ -536,6 +600,8 @@ class SPULifter:
+         # stqa, bra, ila) stay as they are: code that runs from anywhere
+         # cannot use them for its own addresses either.
+         self.pic = False
++        # --promote-regs / SPU_LIFT_PROMOTE=1: registers in C locals (promote_registers).
++        self.promote = False
+ 
+     def _pa(self, x: int) -> str:
+         """A PC-derived LS address, as a C expression."""
+@@ -1096,7 +1162,8 @@ class SPULifter:
+             lines.append(f"void {weak}{f.name}(spu_context* ctx) {{")
+             if self.pic:
+                 lines.append("    const uint32_t _pic = ctx->pic_delta; (void)_pic;")
+-            for b in f.body_lines:
++            body = promote_registers(f.body_lines) if self.promote else f.body_lines
++            for b in body:
+                 lines.append(b if b.endswith(":") else f"    {b}")
+             lines.append("}")
+             lines.append("")
+@@ -1218,6 +1285,10 @@ def main() -> None:
+                         "address chosen at run time (a job's code fragment), so "
+                         "PC-derived addresses add ctx->pic_delta. The runtime sets "
+                         "it on dispatch (spu_overlay_register_pic).")
++    p.add_argument("--promote-regs", action="store_true",
++                   help="Keep each function's SPU registers in C locals, written back "
++                        "to ctx->gpr only where control leaves the function "
++                        "(SPU_LIFT_PROMOTE=1 does the same).")
+     args = p.parse_args()
+ 
+     if args.auto_functions:
+@@ -1333,6 +1404,7 @@ def main() -> None:
+ 
+     lifter = SPULifter(trace=args.trace, prefix=args.symbol_prefix)
+     lifter.pic = args.pic
++    lifter.promote = args.promote_regs or os.environ.get("SPU_LIFT_PROMOTE") == "1"
+     lifter.bi_r0_jump = compute_bi_r0_jumps(insns, bounds)
+     if lifter.bi_r0_jump:
+         print(f"  {len(lifter.bi_r0_jump)} `bi $r0` computed-jump site(s) "
+-- 
+2.55.0.windows.5
+
