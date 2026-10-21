@@ -227,9 +227,9 @@ if ($samples.Count -gt 0) {
         $mhzLines += ('cpu_mhz_min={0}' -f [int](($mhzVals | Measure-Object -Minimum).Minimum))
         $mhzLines += ('cpu_mhz_max={0}' -f [int](($mhzVals | Measure-Object -Maximum).Maximum))
     }
-    # Muestras de juego real: CPU al tope (>= 85 %) y menos de 29.5 FPS.
+    # Muestras de juego real: CPU alta (>= 70 %; con RSX de un hilo la CPU marca menos) y menos de 29.5 FPS.
     # Excluye menus, pantallas de carga (meseta de 30.6) y momentos a 60 FPS que inflan el promedio.
-    $gameplay = @($rows | Where-Object { $_.cpu_pct -ne '' -and [double]$_.cpu_pct -ge 85 -and [double]$_.fps -lt 29.5 } |
+    $gameplay = @($rows | Where-Object { $_.cpu_pct -ne '' -and [double]$_.cpu_pct -ge 70 -and [double]$_.fps -lt 29.5 } |
         ForEach-Object { [double]$_.fps } | Sort-Object)
     $gameLines = @("gameplay_samples=$($gameplay.Count)")
     if ($gameplay.Count -gt 0) {

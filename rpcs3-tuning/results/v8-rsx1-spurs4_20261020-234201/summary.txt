@@ -1,0 +1,16 @@
+profile=v8-rsx1-spurs4
+date=20261020-234201
+samples=70
+fps_avg=22.32
+fps_p5=8.83
+fps_min=7.88
+fps_max=60.07
+cpu_avg_pct=76.2
+free_ram_min_mb=3510
+gameplay_samples=26
+gameplay_fps_avg=12.77
+gameplay_fps_median=11.38
+gameplay_fps_p5=8.23
+cpu_mhz_avg=1984
+cpu_mhz_min=1722
+cpu_mhz_max=3045

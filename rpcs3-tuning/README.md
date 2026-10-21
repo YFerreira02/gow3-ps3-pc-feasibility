@@ -39,7 +39,7 @@ Después, combinar lo que funcione y recuperar efectos visuales (bloom, niebla, 
 
 ## Resultados
 
-Las cifras usan solo los segundos de **juego real**: CPU al 85 % o más y menos de 29.5 FPS. Los menús, las cargas y los momentos a 60 FPS inflan el promedio bruto y no se cuentan. Desde 2026-10-20 el lanzador calcula esto solo (`gameplay_*` en `summary.txt`).
+Las cifras usan solo los segundos de **juego real**: CPU al 70 % o más y menos de 29.5 FPS (hasta v5 el umbral era 85 %; con RSX de un hilo la CPU marca menos y ese umbral descartaba segundos de juego). Los menús, las cargas y los momentos a 60 FPS inflan el promedio bruto y no se cuentan. Desde 2026-10-20 el lanzador calcula esto solo (`gameplay_*` en `summary.txt`).
 
 | Versión | FPS juego (mediana) | FPS juego (promedio) | 5 % más bajo | Segundos de juego | Nota |
 |---|---|---|---|---|---|
@@ -51,7 +51,11 @@ Las cifras usan solo los segundos de **juego real**: CPU al 85 % o más y menos 
 | v5-rsx-1hilo (1) | 16.8 | 16.2 | 11.9 | 52 de 87 | **Mejora clara.** RSX en un solo hilo deja más CPU a las SPU. Desde aquí: cargador conectado, Windows en "Máximo rendimiento" y apps cerradas. |
 | v5-rsx-1hilo (2) | 15.3 | 15.5 | 11.8 | 47 de 87 | Repetición: confirma la mejora. Pasa a ser el perfil para jugar (`best.txt`). |
 | v7-radeon530 | 10.7 | 13.5 | 8.2 | 34 de 49 | Peor: la GPU dedicada Radeon 530 rinde menos que la Vega 8. Descartada. |
+| v6-spurs4 | 12.7 | 14.2 | 10.4 | 52 de 78 | Igual que v3: limitar SPURS a 4 hilos no ayuda. CPU real en juego: ~2.1 GHz. |
+| v8-rsx1-spurs4 | 13.1 | 13.1 | 8.3 | 52 de 70 | Peor que v5: con 4 hilos SPURS se pierde lo ganado. CPU real en juego: **~1.9 GHz**. |
 
-**Conclusión hasta ahora:** apagar el RSX multihilo (v5) sube el juego real de unos 12 a 15–17 FPS, a 1280x720. Esas pruebas se hicieron además con cargador, modo "Máximo rendimiento" y apps cerradas, así que falta repetir v3 en esas mismas condiciones para saber cuánto aporta cada cosa. La Radeon 530 empeora. Siguiente: v3 de control, v6 y v8.
+**Conclusión hasta ahora:** el mejor perfil es v5 (RSX de un hilo), con unos 15–17 FPS en juego real a 1280x720. Limitar los hilos SPURS no ayuda (v6, v8) y la Radeon 530 empeora (v7).
+
+**Hallazgo clave:** en juego, la CPU trabaja a solo **1.7–2.1 GHz**, por debajo incluso de su frecuencia base (2.1 GHz) y lejos de su turbo (3.7 GHz), aunque está al tope de uso, con cargador y en "Máximo rendimiento". Está limitada por consumo (unos 15 W) o por temperatura. Ese es ahora el mayor margen de mejora: los ajustes de RPCS3 ya dieron lo que podían.
 
 **Consejo para medir:** tras cambiar ajustes de SPU, la primera sesión compila caché y sale más lenta. Si un perfil nuevo da cifras muy bajas, repítelo una vez.
