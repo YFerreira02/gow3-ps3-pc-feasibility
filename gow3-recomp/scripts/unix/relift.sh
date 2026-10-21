@@ -1,6 +1,7 @@
 #!/bin/sh
 # Traduce el EBOOT descifrado a C++ (PPU) y las 8 SPU incrustadas.
 # Uso: KIT=../ps3kit ELF=../work/EBOOT.elf scripts/unix/relift.sh
+# KIT = ps3recomp ff66a35 + patches-v2/gow3-kit-sobre-ff66a35.patch (ver patches-v2/LEEME.md)
 set -e
 here=$(cd "$(dirname "$0")/../.." && pwd)
 KIT=${KIT:-$here/../ps3kit}; ELF=${ELF:-$here/../work/EBOOT.elf}
@@ -19,7 +20,8 @@ python3 "$KIT/tools/wrap_spu_elf.py" "$here/meta/wws_pm.bin" --base 0xA00 --entr
     --out "$here/meta/spu/spu_wws_pm_at_0049FF80.elf"
 python3 "$KIT/tools/build_spu_workloads.py" --images "$here/meta/spu" --lifted "$here/src/spu" \
     --out "$here/src/spu/spu_workloads.c" --register-fn gow3_spu_register_all --constructor \
-    --title gow3 --relift
+    --title gow3 --relift \
+    --extra-funcs spu_wws_pm_at_0049FF80=0xA2C,0xA68   # manejador de interrupciones de la política Wws
 
 # Módulos de trabajo Wws incrustados en el EBOOT (cabecera: 4 ila | entry @0x10 |
 # tamaño @0x14 | 0 | 0 | 0xC0DEC0DE @0x20). Se omiten los 4 que son carga útil de
@@ -42,4 +44,5 @@ for i, s in enumerate(st):
     open(f'{out}/jobmod_{hashlib.sha1(b).hexdigest()[:12]}_e{ent:04X}.bin', 'wb').write(b)
 PY
 python3 "$KIT/tools/lift_jobmods.py" --jobmods "$here/meta/jobmods" --out "$here/src/spu" \
-    --register "$here/src/spu/jobmods_register.c" --symbol-prefix gow3
+    --register "$here/src/spu/jobmods_register.c" --symbol-prefix gow3 \
+    --extra-funcs-json "$here/tools/jobmods_extra_funcs.json"   # entradas vistas en "[spu-smc] microstep ... ovl=N"
