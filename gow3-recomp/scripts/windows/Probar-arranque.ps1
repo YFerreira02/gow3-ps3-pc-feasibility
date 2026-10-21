@@ -57,6 +57,12 @@ Remove-Item Env:PS3_SAMPLE -ErrorAction SilentlyContinue
 # Cuánto espera el runtime a que el juego libere la GPU aparcada antes de saltar
 # adelante (por defecto del juego: 2000 ms). Más largo = distinguir 'lento' de 'nunca'.
 $env:GCM_PARK_WAIT_MS = "$ParkWaitMs"
+# Diagnóstico SPU: cuánto código corre en el intérprete lento (cada 5 s) y copia
+# de la memoria local de la SPU cuando la lista de trabajos 206 salta a código
+# que se carga en tiempo de ejecución (para poder traducirlo también).
+$env:SPU_INTERP_HIST = '1'
+$LsDump = Join-Path $Logs 'lsdump'; New-Item -ItemType Directory -Force $LsDump | Out-Null
+$env:SPU_SMC_LSDUMP = "$LsDump,206"
 $env:GCM_HOLD_LOG = '1'      # registra cada vez que la GPU sale de un aparcamiento
 # Cuántas SPU puede usar a la vez cada lista de trabajos Wws (por defecto 1).
 # wid 7 = RenderJobs, 8-10 = EDGE0-2 (geometría). En Ascension, repartir así sus
