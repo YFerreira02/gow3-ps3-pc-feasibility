@@ -11,3 +11,4 @@ src/recomp/
 src/spu/
 build/
 .env
+meta/
