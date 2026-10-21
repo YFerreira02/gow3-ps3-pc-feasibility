@@ -62,6 +62,16 @@ PROFILES = {
         "v5-rsx-1hilo",
         {"Core/Max SPURS Threads": "4"},
     ),
+    "v9-spu-res-off": (
+        "v5 + Accurate SPU Reservations apagado: menos trabajo de sincronizacion SPU (riesgo: cuelgues o fallos).",
+        "v5-rsx-1hilo",
+        {"Core/Accurate SPU Reservations": "false"},
+    ),
+    "v10-spu-giga": (
+        "v5 + SPU Block Size Giga: bloques SPU aun mas grandes (primera sesion recompila la cache SPU).",
+        "v5-rsx-1hilo",
+        {"Core/SPU Block Size": "Giga"},
+    ),
 }
 
 

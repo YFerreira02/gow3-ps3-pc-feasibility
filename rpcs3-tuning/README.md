@@ -34,6 +34,8 @@ Se generan con `python3 make_profiles.py` a partir de `profiles/base_BCES00510.y
 | v6-spurs4 | Desde v3: `Max SPURS Threads` 6 → 4 |
 | v7-radeon530 | Desde v3: GPU dedicada Radeon 530 en vez de la Vega 8 |
 | v8-rsx1-spurs4 | Desde v5: `Max SPURS Threads` 6 → 4 |
+| v9-spu-res-off | Desde v5: `Accurate SPU Reservations` apagado (puede causar cuelgues) |
+| v10-spu-giga | Desde v5: `SPU Block Size` Mega → Giga (la primera sesión recompila; mídelo dos veces) |
 
 Después, combinar lo que funcione y recuperar efectos visuales (bloom, niebla, corrección de color) manteniendo apagado el MLAA de las SPU, que es el que más CPU consume.
 
