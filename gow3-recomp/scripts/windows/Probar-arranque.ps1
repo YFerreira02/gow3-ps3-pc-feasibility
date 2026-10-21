@@ -73,7 +73,35 @@ Write-Host '                 flechas = cruceta, Enter = START, Tab = SELECT, Q/W
 Write-Host '(Haz clic en la ventana del juego para que reciba las teclas.)'
 Write-Host ''
 Write-Host "Se cerrará solo en $Seconds s (puedes cerrarlo antes)."
-if (-not $p.WaitForExit($Seconds * 1000)) {
+
+# Vigilancia: si el registro deja de crecer 25 s con el juego abierto, el proceso
+# está colgado; se guarda un volcado (pila de cada hilo) para ver dónde.
+Add-Type -TypeDefinition @"
+using System; using System.Runtime.InteropServices; using Microsoft.Win32.SafeHandles;
+public static class Volcado {
+  [DllImport("dbghelp.dll", SetLastError=true)]
+  static extern bool MiniDumpWriteDump(IntPtr h, uint pid, SafeFileHandle f, uint type, IntPtr e, IntPtr u, IntPtr c);
+  public static bool Escribir(System.Diagnostics.Process p, string ruta) {
+    using (var fs = new System.IO.FileStream(ruta, System.IO.FileMode.Create)) {
+      // MiniDumpNormal | WithThreadInfo | WithUnloadedModules: pilas de todos los hilos, pocos MB
+      return MiniDumpWriteDump(p.Handle, (uint)p.Id, fs.SafeFileHandle, 0x1020, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+    }
+  }
+}
+"@ -ErrorAction SilentlyContinue
+$errLog = "$Log.err"; $ultimo = -1; $quieto = 0; $volcado = $false
+$fin = (Get-Date).AddSeconds($Seconds)
+while (-not $p.HasExited -and (Get-Date) -lt $fin) {
+    Start-Sleep -Seconds 2
+    $tam = if (Test-Path $errLog) { (Get-Item $errLog).Length } else { 0 }
+    if ($tam -eq $ultimo) { $quieto += 2 } else { $quieto = 0; $ultimo = $tam }
+    if (-not $volcado -and $quieto -ge 25) {
+        $dmp = Join-Path $Logs "cuelgue_$Stamp.dmp"
+        try { if ([Volcado]::Escribir($p, $dmp)) { Write-Host "Cuelgue detectado: volcado guardado en $dmp" } } catch { Write-Host "No se pudo guardar el volcado: $_" }
+        $volcado = $true
+    }
+}
+if (-not $p.HasExited) {
     Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
     if (-not $p.HasExited) { & taskkill.exe /PID $p.Id /T /F | Out-Null }
