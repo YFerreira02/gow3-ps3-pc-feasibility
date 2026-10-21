@@ -8,6 +8,7 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <stdlib.h>
 #else
 #include <stdlib.h>
 #endif
@@ -18,6 +19,11 @@ void set_default(const char* name, const char* value)
 {
 #ifdef _WIN32
     if (GetEnvironmentVariableA(name, nullptr, 0)) return;
+    // _putenv_s, not only SetEnvironmentVariableA: the CRT's getenv reads its
+    // own copy of the environment, which SetEnvironmentVariableA does not
+    // touch. Under MSVC the boot harness's getenv cache hid that; built with
+    // MinGW every default here was silently ignored.
+    _putenv_s(name, value);
     SetEnvironmentVariableA(name, value);
 #else
     setenv(name, value, 0);
