@@ -45,6 +45,13 @@ struct Gow3Defaults {
         // no hay trabajo (p. ej. durante una carga larga): es su espera normal,
         // no un cuelgue. Sin esto el runtime la detenía a los 30 s.
         set_default("SPU_DMA_REPEAT_SECS", "86400");
+        // En el runtime de Ascension el guardia de DMA repetida corta a las
+        // 256 repeticiones, sin condición de tiempo (SPU_DMA_REPEAT_LIMIT): las
+        // doce políticas Wws que sondean su cola vacía caían cada pocos
+        // segundos, a veces a mitad de trabajo, y antes del bloqueo un trabajo
+        // fallaba su propia comprobación (HALT-ASSERT heqi). Sondear es su
+        // espera normal.
+        set_default("SPU_DMA_REPEAT_LIMIT", "4000000000");
         set_default("LD_PERF_OVERLAY", "1");
         set_default("PS3_VERBOSE", "1");           // bring-up: keep the logs
     }
