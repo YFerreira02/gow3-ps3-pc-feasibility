@@ -6535,7 +6535,7 @@ index 00000000..0ddee3e9
 +             dbg_prof((DWORD)a, b ? b : 5);
 +         } else if (!strcmp(verb, "hle")) {
 diff --git a/runtime/spu/spu_channels.c b/runtime/spu/spu_channels.c
-index 506da3f9..83d2ea01 100644
+index 506da3f9..53d763a1 100644
 --- a/runtime/spu/spu_channels.c
 +++ b/runtime/spu/spu_channels.c
 @@ -21,9 +21,9 @@
@@ -7367,7 +7367,29 @@ index 506da3f9..83d2ea01 100644
  void spu_register_stack_reset_entry(uint32_t entry, int image_id)
  {
      if (s_stack_reset_count < 16) {
-@@ -1645,17 +2174,110 @@ void spu_lockguard_check(spu_context* ctx, uint32_t ea, const uint8_t* src, uint
+@@ -1582,6 +2111,21 @@ static int spu_taskset_resident_image(const spu_context* ctx)
+  * time -- match the first 16 bytes of the streamed content instead. */
+ void spu_overlay_register_sig(const uint8_t sig[16], int image_id)
+ {
++    /* SPU_OVL_OFF=all | <id>[,<id>...] | <lo>-<hi>: leave these overlay images
++     * unregistered, so their code runs in the interpreter -- to find which of
++     * several lifted job modules changes behaviour, without rebuilding. */
++    { const char* e = getenv("SPU_OVL_OFF");
++      if (e && *e) {
++          int off = !strcmp(e, "all");
++          for (const char* q = e; !off && *q; ) {
++              char* end; long lo = strtol(q, &end, 10), hi = lo;
++              if (end == q) break;
++              if (*end == '-') hi = strtol(end + 1, &end, 10);
++              if (image_id >= lo && image_id <= hi) off = 1;
++              q = (*end == ',') ? end + 1 : end + (*end != 0);
++          }
++          if (off) { fprintf(stderr, "[spu-ovl] SPU_OVL_OFF: image %d left to the interpreter\n", image_id); return; }
++      } }
+     if (s_ovl_src_count < SPU_OVL_SRC_MAX) {
+         s_ovl_src[s_ovl_src_count].src_ea = 0;
+         s_ovl_src[s_ovl_src_count].image_id = image_id;
+@@ -1645,17 +2189,110 @@ void spu_lockguard_check(spu_context* ctx, uint32_t ea, const uint8_t* src, uint
                  ea, size, os, on, ns, nn); }
  }
  
@@ -7480,7 +7502,7 @@ index 506da3f9..83d2ea01 100644
      }
      for (int i = 0; i < s_ovl_src_count; i++) {
          const spu_ovl_src* o = &s_ovl_src[i];
-@@ -1663,17 +2285,7 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
+@@ -1663,17 +2300,7 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
                               : (o->src_ea == ea);
          if (hit) {
              if (o->span) {
@@ -7499,7 +7521,7 @@ index 506da3f9..83d2ea01 100644
                  return;
              }
              if (ctx->resident_ovl != o->image_id) {
-@@ -1687,6 +2299,34 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
+@@ -1687,6 +2314,34 @@ void spu_overlay_note_get(spu_context* ctx, uint32_t ea, const uint8_t* ls, uint
              return;
          }
      }
@@ -7534,7 +7556,7 @@ index 506da3f9..83d2ea01 100644
  }
  
  /* Match a 16-byte module header against the registered content signatures.
-@@ -1894,7 +2534,9 @@ void spu_spurs_taskset_syscall(spu_context* ctx)   /* non-static: also called by
+@@ -1894,7 +2549,9 @@ void spu_spurs_taskset_syscall(spu_context* ctx)   /* non-static: also called by
  static int spu_smc_microstep(spu_context* ctx)
  {
      uint32_t pc = ctx->pc & SPU_LS_MASK & ~3u;
@@ -7544,7 +7566,7 @@ index 506da3f9..83d2ea01 100644
          uint32_t w = ((uint32_t)ctx->ls[pc] << 24) | ((uint32_t)ctx->ls[pc+1] << 16) |
                       ((uint32_t)ctx->ls[pc+2] << 8) | ctx->ls[pc+3];
          uint32_t op11 = w >> 21, op9 = w >> 23, op8 = w >> 24, op7 = w >> 25;
-@@ -2036,17 +2678,114 @@ static int spu_smc_microstep(spu_context* ctx)
+@@ -2036,17 +2693,114 @@ static int spu_smc_microstep(spu_context* ctx)
           * III`s job kernel dies here on an `ilh` at LS 0x6638 -- a perfectly
           * ordinary instruction the interpreter handles -- and with it the
           * decompression job it was running never completes. */
@@ -7668,7 +7690,7 @@ index 506da3f9..83d2ea01 100644
          /* A live interpreter rejoin is a transfer, not a host return. Nested
           * drains can repair an empty trampoline, but the top-level driver
           * otherwise ends the run before executing the lifted target.
-@@ -2054,7 +2793,7 @@ static int spu_smc_microstep(spu_context* ctx)
+@@ -2054,7 +2808,7 @@ static int spu_smc_microstep(spu_context* ctx)
           * stopped states and diagnostic exits keep their existing behavior. */
          if (ctx->image_id >= 0 && (ctx->status & SPU_STATUS_RUNNING) &&
              (!return_pc || (ctx->pc & SPU_LS_MASK) != return_pc) &&
@@ -7677,7 +7699,7 @@ index 506da3f9..83d2ea01 100644
              g_spu_trampoline_fn = spu_indirect_branch;
              return 1;
          }
-@@ -2079,7 +2818,7 @@ void spu_indirect_branch(spu_context* ctx)
+@@ -2079,7 +2833,7 @@ void spu_indirect_branch(spu_context* ctx)
       * enforce the preserve-all-registers hardware contract here -- the first
       * interrupts-enabled dispatch at the saved srr0 is the irete. */
      { extern int spu_irq_regs_maybe_restore(spu_context*);
@@ -7686,7 +7708,7 @@ index 506da3f9..83d2ea01 100644
            static int s_it = -1; if (s_it < 0) s_it = getenv("SPU_IRQTRACE") ? 1 : 0;
            static int _r = 0;
            if (s_it && _r++ < 200)
-@@ -2107,10 +2846,44 @@ void spu_indirect_branch(spu_context* ctx)
+@@ -2107,10 +2861,44 @@ void spu_indirect_branch(spu_context* ctx)
              /* cellSpursModulePoll: report "no contention — keep running".
               * (The host scheduler admits bounded workers; this service does not preempt.) */
              unsigned n = ++g_spurs_pm_polls;
@@ -7734,7 +7756,7 @@ index 506da3f9..83d2ea01 100644
              ctx->pc = ctx->gpr[0]._u32[0] & SPU_LS_MASK;
              return;
          }
-@@ -2226,16 +2999,8 @@ void spu_indirect_branch(spu_context* ctx)
+@@ -2226,16 +3014,8 @@ void spu_indirect_branch(spu_context* ctx)
      /* The launched task owns the shared task-code region: resolve it there FIRST
       * so a co-resident task at the same LS base cannot shadow it. (resident_task
       * is 0 outside the region, so this only ever fires for genuine task code.) */

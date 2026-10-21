@@ -6,7 +6,8 @@
 param(
     [string]$Iso    = 'C:\Games\God_Of_War_3\God of War III (Europe) (En,Fr,De,Es,It,Nl,Pt,Pl,Ru).iso',
     [string]$Rpcs3  = 'C:\Games\Emulador',
-    [int]$Seconds   = 180
+    [int]$Seconds   = 180,
+    [string]$Tag    = ''
 )
 $ErrorActionPreference = 'Stop'
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -65,5 +66,5 @@ if (-not $p.WaitForExit($Seconds * 1000)) {
     if (-not $p.HasExited) { & taskkill.exe /PID $p.Id /T /F | Out-Null }
     $estado = "cerrado tras $Seconds s"
 } else { $estado = "terminó solo, código $($p.ExitCode)" }
-"$estado | disco=$Disc | $(Get-Date -Format s)" | Out-File (Join-Path $Logs "arranque_$Stamp.txt") -Encoding utf8
+"$estado | disco=$Disc | tag=$Tag | SPU_OVL_OFF=$env:SPU_OVL_OFF | $(Get-Date -Format s)" | Out-File (Join-Path $Logs "arranque_$Stamp.txt") -Encoding utf8
 Write-Host "Listo: $estado."
