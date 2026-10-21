@@ -1,0 +1,13 @@
+profile=v7-radeon530
+date=20261020-233207
+samples=49
+fps_avg=22.86
+fps_p5=8.35
+fps_min=7.47
+fps_max=60.28
+cpu_avg_pct=87.4
+free_ram_min_mb=3478
+gameplay_samples=34
+gameplay_fps_avg=13.45
+gameplay_fps_median=10.70
+gameplay_fps_p5=8.16

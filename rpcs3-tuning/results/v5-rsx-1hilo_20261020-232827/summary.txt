@@ -1,0 +1,13 @@
+profile=v5-rsx-1hilo
+date=20261020-232827
+samples=87
+fps_avg=18.50
+fps_p5=11.64
+fps_min=1.84
+fps_max=60.04
+cpu_avg_pct=81.2
+free_ram_min_mb=3132
+gameplay_samples=47
+gameplay_fps_avg=15.49
+gameplay_fps_median=15.29
+gameplay_fps_p5=11.76

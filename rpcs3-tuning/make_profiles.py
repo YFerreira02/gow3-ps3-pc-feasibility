@@ -56,6 +56,12 @@ PROFILES = {
         "v3-720p",
         {"Video/Vulkan/Adapter": "\"Radeon 530 Series\""},
     ),
+    # Combinaciones sobre el mejor resultado (v5).
+    "v8-rsx1-spurs4": (
+        "v5 + maximo 4 hilos SPURS: menos hilos compitiendo, sobre el RSX de un solo hilo.",
+        "v5-rsx-1hilo",
+        {"Core/Max SPURS Threads": "4"},
+    ),
 }
 
 

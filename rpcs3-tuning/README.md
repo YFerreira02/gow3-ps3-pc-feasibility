@@ -33,6 +33,7 @@ Se generan con `python3 make_profiles.py` a partir de `profiles/base_BCES00510.y
 | v5-rsx-1hilo | Desde v3: `Multithreaded RSX` apagado |
 | v6-spurs4 | Desde v3: `Max SPURS Threads` 6 → 4 |
 | v7-radeon530 | Desde v3: GPU dedicada Radeon 530 en vez de la Vega 8 |
+| v8-rsx1-spurs4 | Desde v5: `Max SPURS Threads` 6 → 4 |
 
 Después, combinar lo que funcione y recuperar efectos visuales (bloom, niebla, corrección de color) manteniendo apagado el MLAA de las SPU, que es el que más CPU consume.
 
@@ -47,7 +48,10 @@ Las cifras usan solo los segundos de **juego real**: CPU al 85 % o más y menos 
 | v2-spu-loop | 12.2 | 13.5 | 9.2 | 62 de 84 | Igual o apenas mejor que v0, dentro del margen de ruido. |
 | v3-720p | 12.6 | 13.3 | 9.5 | 35 de 81 | **1280x720 sin costo medible** frente a 720x480. Gran parte de la sesión fue en menús. Pasa a ser el perfil para jugar (`best.txt`). |
 | v4-sched-alt | 12.2 | 13.1 | 9.0 | 62 de 81 | Sin cambio frente a v3: el planificador de hilos no es el problema. |
+| v5-rsx-1hilo (1) | 16.8 | 16.2 | 11.9 | 52 de 87 | **Mejora clara.** RSX en un solo hilo deja más CPU a las SPU. Desde aquí: cargador conectado, Windows en "Máximo rendimiento" y apps cerradas. |
+| v5-rsx-1hilo (2) | 15.3 | 15.5 | 11.8 | 47 de 87 | Repetición: confirma la mejora. Pasa a ser el perfil para jugar (`best.txt`). |
+| v7-radeon530 | 10.7 | 13.5 | 8.2 | 34 de 49 | Peor: la GPU dedicada Radeon 530 rinde menos que la Vega 8. Descartada. |
 
-**Conclusión hasta ahora:** el juego va a unos 12–13 FPS en juego real con cualquiera de estos perfiles. Como la GPU no es el límite, la resolución original no cuesta FPS. Las siguientes pruebas (v4–v7) parten de v3 y cambian una sola cosa cada una, para atacar la CPU.
+**Conclusión hasta ahora:** apagar el RSX multihilo (v5) sube el juego real de unos 12 a 15–17 FPS, a 1280x720. Esas pruebas se hicieron además con cargador, modo "Máximo rendimiento" y apps cerradas, así que falta repetir v3 en esas mismas condiciones para saber cuánto aporta cada cosa. La Radeon 530 empeora. Siguiente: v3 de control, v6 y v8.
 
 **Consejo para medir:** tras cambiar ajustes de SPU, la primera sesión compila caché y sale más lenta. Si un perfil nuevo da cifras muy bajas, repítelo una vez.
