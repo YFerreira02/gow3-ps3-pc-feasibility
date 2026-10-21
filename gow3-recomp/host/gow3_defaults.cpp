@@ -35,6 +35,10 @@ struct Gow3Defaults {
         set_default("GCM_REPORT_SPU_HOLD_MS", "50");
         set_default("SPURS_READY_LEVEL", "1");
         set_default("SPURS_IDLE_BACKOFF_MAX", "0");
+        // La política Wws sondea su cola de trabajos con la misma DMA mientras
+        // no hay trabajo (p. ej. durante una carga larga): es su espera normal,
+        // no un cuelgue. Sin esto el runtime la detenía a los 30 s.
+        set_default("SPU_DMA_REPEAT_SECS", "86400");
         set_default("LD_PERF_OVERLAY", "1");
         set_default("PS3_VERBOSE", "1");           // bring-up: keep the logs
     }
