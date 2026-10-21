@@ -48,8 +48,11 @@ $env:PS3_HDD0_ROOT = $Hdd0
 $env:PS3_HDD1_ROOT = $Hdd1
 if (Test-Path (Join-Path $Rpcs3 'dev_flash')) { $env:PS3_DEV_FLASH = Join-Path $Rpcs3 'dev_flash' }
 if (Test-Path (Join-Path $Rpcs3 'avcodec-63.dll')) { $env:PATH = "$Rpcs3;$env:PATH" }   # FFmpeg de RPCS3
-$env:PS3_VERBOSE = '1'
-$env:PS3_SAMPLE  = '20'      # perfilador: cada 20 ms anota qué función ejecuta cada hilo
+# Registro reducido: con PS3_VERBOSE=1 todos los hilos escriben por un mismo
+# cerrojo del archivo de registro, y eso puede trabar el proceso entero (Ascension
+# lo apaga por defecto). El perfilador también queda apagado.
+$env:PS3_VERBOSE = '0'
+Remove-Item Env:PS3_SAMPLE -ErrorAction SilentlyContinue
 # Cuánto espera el runtime a que el juego libere la GPU aparcada antes de saltar
 # adelante (por defecto del juego: 2000 ms). Más largo = distinguir 'lento' de 'nunca'.
 $env:GCM_PARK_WAIT_MS = "$ParkWaitMs"
