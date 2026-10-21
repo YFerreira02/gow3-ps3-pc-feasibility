@@ -1,0 +1,9 @@
+profile=v3-720p
+date=20261020-230126
+samples=81
+fps_avg=30.27
+fps_p5=10.48
+fps_min=8.61
+fps_max=60.05
+cpu_avg_pct=90.5
+free_ram_min_mb=2182

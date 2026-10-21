@@ -195,6 +195,16 @@ if ($samples.Count -gt 0) {
     $ramVals = $rows | Where-Object { $_.free_ram_mb -ne '' } | ForEach-Object { [double]$_.free_ram_mb }
     $cpuAvg = if ($cpuVals) { ($cpuVals | Measure-Object -Average).Average } else { 0 }
     $ramMin = if ($ramVals) { ($ramVals | Measure-Object -Minimum).Minimum } else { 0 }
+    # Muestras de juego real: CPU al tope (>= 85 %) y menos de 29.5 FPS.
+    # Excluye menus, pantallas de carga (meseta de 30.6) y momentos a 60 FPS que inflan el promedio.
+    $gameplay = @($rows | Where-Object { $_.cpu_pct -ne '' -and [double]$_.cpu_pct -ge 85 -and [double]$_.fps -lt 29.5 } |
+        ForEach-Object { [double]$_.fps } | Sort-Object)
+    $gameLines = @("gameplay_samples=$($gameplay.Count)")
+    if ($gameplay.Count -gt 0) {
+        $gameLines += ('gameplay_fps_avg={0}' -f (($gameplay | Measure-Object -Average).Average).ToString('0.00', $culture))
+        $gameLines += ('gameplay_fps_median={0}' -f ($gameplay[[int][math]::Floor(($gameplay.Count - 1) / 2)]).ToString('0.00', $culture))
+        $gameLines += ('gameplay_fps_p5={0}' -f ($gameplay[[int][math]::Floor(($gameplay.Count - 1) * 0.05)]).ToString('0.00', $culture))
+    }
     @(
         "profile=$Perfil"
         "date=$stamp"
@@ -205,6 +215,7 @@ if ($samples.Count -gt 0) {
         ('fps_max={0}' -f ($sorted[-1]).ToString('0.00', $culture))
         ('cpu_avg_pct={0}' -f ([double]$cpuAvg).ToString('0.0', $culture))
         ('free_ram_min_mb={0}' -f $ramMin)
+        $gameLines
     ) | Set-Content -LiteralPath $summaryFile -Encoding ASCII
     Write-Host ''
     Get-Content -LiteralPath $summaryFile | Write-Host

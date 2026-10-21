@@ -35,6 +35,27 @@ PROFILES = {
         "v2-spu-loop",
         {"Video/Resolution": "1280x720"},
     ),
+    # A partir de aqui cada perfil parte de v3 y cambia UNA cosa, para comparar cada idea por separado.
+    "v4-sched-alt": (
+        "v3 + planificador de hilos de RPCS3 (alternativo) en vez del de Windows.",
+        "v3-720p",
+        {"Core/Thread Scheduler Mode": "RPCS3 Alternative Scheduler"},
+    ),
+    "v5-rsx-1hilo": (
+        "v3 + RSX multihilo apagado: libera un hilo de CPU para las SPU.",
+        "v3-720p",
+        {"Video/Multithreaded RSX": "false"},
+    ),
+    "v6-spurs4": (
+        "v3 + maximo 4 hilos SPURS (antes 6): menos hilos SPU compitiendo por 4 nucleos.",
+        "v3-720p",
+        {"Core/Max SPURS Threads": "4"},
+    ),
+    "v7-radeon530": (
+        "v3 + GPU dedicada Radeon 530 en vez de la Vega 8: la Vega comparte RAM con la CPU.",
+        "v3-720p",
+        {"Video/Vulkan/Adapter": "\"Radeon 530 Series\""},
+    ),
 }
 
 

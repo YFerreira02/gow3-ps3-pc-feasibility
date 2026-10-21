@@ -29,11 +29,24 @@ Se generan con `python3 make_profiles.py` a partir de `profiles/base_BCES00510.y
 | v1-spu-mega | `SPU Block Size`: Safe → Mega |
 | v2-spu-loop | `SPU loop detection`: activado |
 | v3-720p | Resolución 720x480 → 1280x720 (la original de PS3) |
+| v4-sched-alt | Desde v3: planificador de hilos "RPCS3 Alternative Scheduler" |
+| v5-rsx-1hilo | Desde v3: `Multithreaded RSX` apagado |
+| v6-spurs4 | Desde v3: `Max SPURS Threads` 6 → 4 |
+| v7-radeon530 | Desde v3: GPU dedicada Radeon 530 en vez de la Vega 8 |
 
-Candidatos para las siguientes versiones, según lo que digan las mediciones: planificador de hilos de RPCS3, RSX multihilo apagado, número de hilos SPURS, GPU Radeon 530 frente a Vega 8, y recuperar efectos visuales (bloom, niebla, corrección de color) manteniendo apagado el MLAA de las SPU, que es el que más CPU consume.
+Después, combinar lo que funcione y recuperar efectos visuales (bloom, niebla, corrección de color) manteniendo apagado el MLAA de las SPU, que es el que más CPU consume.
 
 ## Resultados
 
-| Versión | FPS promedio | FPS 5 % bajo | CPU media | Nota |
-|---|---|---|---|---|
-| v0-actual | 12.3 | 8.9 | 96 % | 2026-10-20. CPU al tope todo el tiempo: el límite es la CPU, no la GPU. Mínimo 6.9 FPS, RAM libre mínima 2.2 GB. |
+Las cifras usan solo los segundos de **juego real**: CPU al 85 % o más y menos de 29.5 FPS. Los menús, las cargas y los momentos a 60 FPS inflan el promedio bruto y no se cuentan. Desde 2026-10-20 el lanzador calcula esto solo (`gameplay_*` en `summary.txt`).
+
+| Versión | FPS juego (mediana) | FPS juego (promedio) | 5 % más bajo | Segundos de juego | Nota |
+|---|---|---|---|---|---|
+| v0-actual | 11.7 | 12.3 | 8.9 | 78 de 78 | Línea base, 720x480. CPU al 96 %: el límite es la CPU. |
+| v1-spu-mega | 6.8 | 7.0 | 1.7 | 36 de 40 | **No válida.** Cambiar el tamaño de bloque SPU obliga a recompilar la caché SPU, y esta sesión pasó compilando. v2 incluye el mismo cambio y no muestra el problema. |
+| v2-spu-loop | 12.2 | 13.5 | 9.2 | 62 de 84 | Igual o apenas mejor que v0, dentro del margen de ruido. |
+| v3-720p | 12.6 | 13.3 | 9.5 | 35 de 81 | **1280x720 sin costo medible** frente a 720x480. Gran parte de la sesión fue en menús. Pasa a ser el perfil para jugar (`best.txt`). |
+
+**Conclusión hasta ahora:** el juego va a unos 12–13 FPS en juego real con cualquiera de estos perfiles. Como la GPU no es el límite, la resolución original no cuesta FPS. Las siguientes pruebas (v4–v7) parten de v3 y cambian una sola cosa cada una, para atacar la CPU.
+
+**Consejo para medir:** tras cambiar ajustes de SPU, la primera sesión compila caché y sale más lenta. Si un perfil nuevo da cifras muy bajas, repítelo una vez.

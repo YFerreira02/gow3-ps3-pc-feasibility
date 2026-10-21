@@ -1,0 +1,9 @@
+profile=v2-spu-loop
+date=20261020-225814
+samples=84
+fps_avg=21.63
+fps_p5=9.99
+fps_min=7.79
+fps_max=60.05
+cpu_avg_pct=87.7
+free_ram_min_mb=2343

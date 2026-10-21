@@ -1,0 +1,9 @@
+profile=v1-spu-mega
+date=20261020-225458
+samples=40
+fps_avg=11.48
+fps_p5=1.73
+fps_min=1.39
+fps_max=60.03
+cpu_avg_pct=97.2
+free_ram_min_mb=2117
