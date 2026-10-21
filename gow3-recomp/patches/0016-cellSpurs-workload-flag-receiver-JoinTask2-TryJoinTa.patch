@@ -1,0 +1,164 @@
+From 3503b83a64509a03d0f904746180cedb67401eda Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 21 Oct 2026 12:16:50 -0500
+Subject: [PATCH] cellSpurs: workload flag receiver, JoinTask2/TryJoinTask2,
+ DestroyTaskset2, LFQueue detach
+
+God of War III's third boot (Windows) reached its intro at up to 35 fps and
+then stalled on two unresolved imports:
+- _cellSpursWorkloadFlagReceiver / cellSpursGetWorkloadFlag: the receiver is
+  the byte at +0x77 (0xFF = none) and the flag word +0x6C, as RPCS3 lays out
+  CellSpurs; Initialize now sets both.
+- cellSpursJoinTask2: really waits for the task's enabled bit (+0x30) to
+  clear, then reads the Taskset2 exit code (+0x1980); gives up loudly after
+  10 s. TryJoinTask2 answers BUSY instead of waiting.
+DestroyTaskset2 forwards to DestroyTaskset; LFQueueDetachLv2EventQueue is OK.
+---
+ libs/spurs/cellSpurs.c | 92 ++++++++++++++++++++++++++++++++++++++++++
+ libs/spurs/cellSpurs.h |  6 +++
+ 2 files changed, 98 insertions(+)
+
+diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
+index 9d318a1..cbdb6b5 100644
+--- a/libs/spurs/cellSpurs.c
++++ b/libs/spurs/cellSpurs.c
+@@ -420,6 +420,7 @@ enum {
+     SPURS_WKL_FLAG     = 0x60,
+     SPURS_WKL_SIGNAL1  = 0x70,
+     SPURS_NSPUS        = 0x76,
++    SPURS_WKL_FLAG_RECEIVER = 0x77,
+     SPURS_WKL_STATE1   = 0x80,
+     SPURS_WKL_ENABLED  = 0xB0,
+     SPURS_SYSSRV_MSG   = 0xBD,
+@@ -525,6 +526,10 @@ static s32 spurs_initialize_common(u32 spurs_ea, u32 nspus, const char* prefix)
+     memset(vm_base + spurs_ea, 0, SPURS_INST_SIZE);
+     *(vm_base + spurs_ea + SPURS_NSPUS) = (u8)si->nspus;
+     vm_write64(spurs_ea + SPURS_WKL_FLAG, 0xFFFFFFFFFFFFFFFFull); /* no receiver */
++    /* RPCS3 cellSpurs.h: CellSpursWorkloadFlag is 16 bytes at +0x60 with the
++     * flag word at +0x6C; wklFlagReceiver is the byte at +0x77, 0xFF = none. */
++    vm_write32(spurs_ea + SPURS_WKL_FLAG + 0x0C, 0xFFFFFFFFu);
++    *(vm_base + spurs_ea + SPURS_WKL_FLAG_RECEIVER) = 0xFF;
+ 
+     s32 start_rc = spurs_scheduler_start(si);
+     AcquireSRWLockExclusive(&si->lock);
+@@ -1324,6 +1329,58 @@ s32 cellSpursCreateTaskWithAttribute(CellSpursTaskset* taskset,
+ 
+ /* The SDK's versioned taskset-attribute initializer. We forward taskset creation
+  * through CreateTaskset (which ignores the attribute), so just zero the struct. */
++/* cellSpursJoinTask2 / cellSpursTryJoinTask2 (taskset, taskId, s32* exitCode).
++ * A task that exits is cleared from the taskset's enabled bitset at +0x30
++ * (spu_taskset_task_exited), and a Taskset2 records its exit code at
++ * +0x1980 + 16*id (+8). Join waits for that; TryJoin answers BUSY while the
++ * task still runs. God of War III recreates one SPU task (elf 0x3FEB00) over
++ * and over and joins it each time with JoinTask2; unresolved, the join
++ * returned at once and the next round reused buffers the task still used. */
++static s32 spurs_join_task2(u64 taskset_ea, u32 taskId, u64 exit_ea, int wait)
++{
++    if (!taskset_ea) return CELL_SPURS_TASK_ERROR_NULL_POINTER;
++    if (taskId >= 128) return CELL_SPURS_TASK_ERROR_INVAL;
++    const u32 ts = (u32)taskset_ea;
++    const u8 m = (u8)(0x80u >> (taskId & 7));
++    unsigned long long waited = 0;
++    while (__atomic_load_n(vm_base + ts + 0x30 + taskId / 8, __ATOMIC_ACQUIRE) & m) {
++        if (!wait) return CELL_SPURS_TASK_ERROR_BUSY;
++        Sleep(1);
++        if (++waited % 2000 == 0)
++            printf("[cellSpurs] JoinTask2(taskset=0x%08X id=%u) still waiting (%llus)\n",
++                   ts, taskId, waited / 1000);
++        if (waited >= 10000) {   /* a task the runtime never started: carry on, said loudly */
++            printf("[cellSpurs] JoinTask2(taskset=0x%08X id=%u) GAVE UP after 10s -- task never exited\n", ts, taskId);
++            break;
++        }
++    }
++    if (exit_ea) {
++        const u8* e = vm_base + ts + 0x1980 + 16u * taskId;
++        s32 code = (s32)((u32)e[8] << 24 | (u32)e[9] << 16 | (u32)e[10] << 8 | e[11]);
++        vm_write32((u32)exit_ea, (u32)code);
++    }
++    return CELL_OK;
++}
++s32 cellSpursJoinTask2(u64 taskset_ea, u32 taskId, u64 exit_ea)
++{
++    static int _n = 0;
++    if (PS3_LOG_FIRST(_n, 8)) printf("[cellSpurs] JoinTask2(taskset=0x%08X id=%u)\n", (u32)taskset_ea, taskId);
++    return spurs_join_task2(taskset_ea, taskId, exit_ea, 1);
++}
++s32 cellSpursTryJoinTask2(u64 taskset_ea, u32 taskId, u64 exit_ea)
++{
++    return spurs_join_task2(taskset_ea, taskId, exit_ea, 0);
++}
++s32 cellSpursDestroyTaskset2(CellSpursTaskset* taskset)
++{
++    return cellSpursDestroyTaskset(taskset);
++}
++s32 cellSpursLFQueueDetachLv2EventQueue(u64 queue_ea)
++{
++    (void)queue_ea;
++    return CELL_OK;
++}
++
+ s32 _cellSpursTasksetAttributeInitialize(CellSpursTasksetAttribute* attr,
+                                          u32 revision, u32 sdkVersion, u64 argTaskset,
+                                          u64 priority, u32 maxContention)
+@@ -3223,6 +3280,41 @@ s32 cellSpursGetWorkloadInfo(u64 spurs_ea, u32 wid, u64 info_ea)
+     return CELL_OK;
+ }
+ 
++/* cellSpursGetWorkloadFlag(spurs, CellSpursWorkloadFlag** flag): the flag
++ * lives inside the instance, at +0x60 (RPCS3: spurs.ptr(&CellSpurs::wklFlag)). */
++s32 cellSpursGetWorkloadFlag(u64 spurs_ea, u64 flag_pp)
++{
++    if (!spurs_ea || !flag_pp) return (s32)0x80410711; /* CELL_SPURS_CORE_ERROR_NULL_POINTER */
++    vm_write32((u32)flag_pp, (u32)spurs_ea + SPURS_WKL_FLAG);
++    return CELL_OK;
++}
++
++/* _cellSpursWorkloadFlagReceiver(spurs, wid, is_set): makes `wid` the one
++ * workload told when an SPU clears the workload flag (or drops it), as RPCS3
++ * does: setting needs no current receiver (else BUSY), clearing needs `wid`
++ * to be it (else PERM); either way the flag goes back to -1. God of War III
++ * calls this on its renderer workload; unresolved, the call returned garbage. */
++s32 _cellSpursWorkloadFlagReceiver(u64 spurs_ea, u32 wid, u32 is_set)
++{
++    static int _n = 0;
++    if (PS3_LOG_FIRST(_n, 8)) printf("[cellSpurs] WorkloadFlagReceiver(spurs=0x%08X wid=%u set=%u)\n", (u32)spurs_ea, wid, is_set);
++    if (!spurs_ea) return (s32)0x80410811;                 /* POLICY_MODULE_ERROR_NULL_POINTER */
++    if (spurs_ea & 127) return (s32)0x80410810;            /* ALIGN */
++    if (wid >= CELL_SPURS_MAX_WORKLOAD) return (s32)0x80410802; /* INVAL */
++    const u32 se = (u32)spurs_ea;
++    if (!(vm_read32(se + SPURS_WKL_ENABLED) & (0x80000000u >> wid))) return (s32)0x80410805; /* SRCH */
++    u8* recv = vm_base + se + SPURS_WKL_FLAG_RECEIVER;
++    u8 cur = __atomic_load_n(recv, __ATOMIC_ACQUIRE);
++    if (is_set) {
++        if (cur != 0xFF && cur != (u8)wid) return (s32)0x8041080A;  /* BUSY */
++    } else if (cur != (u8)wid) {
++        return (s32)0x80410809;                                    /* PERM */
++    }
++    vm_write32(se + SPURS_WKL_FLAG + 0x0C, 0xFFFFFFFFu);
++    __atomic_store_n(recv, is_set ? (u8)wid : 0xFF, __ATOMIC_RELEASE);
++    return CELL_OK;
++}
++
+ s32 cellSpursShutdownWorkload(u64 spurs_ea, u32 wid)
+ {
+     static int _n = 0;
+diff --git a/libs/spurs/cellSpurs.h b/libs/spurs/cellSpurs.h
+index 04e49d4..a65d02f 100644
+--- a/libs/spurs/cellSpurs.h
++++ b/libs/spurs/cellSpurs.h
+@@ -318,6 +318,12 @@ s32 cellSpursQueueSize(u64 queue_ea, u64 size_ea);
+ s32 _cellSpursLFQueueInitialize(u64 owner_ea, u64 queue_ea, u64 buffer_ea,
+                                 u32 size, u32 depth, u32 direction);
+ s32 _cellSpursLFQueuePushBody(u64 queue_ea, u64 data_ea, u32 isBlocking);
++s32 cellSpursGetWorkloadFlag(u64 spurs_ea, u64 flag_pp);
++s32 _cellSpursWorkloadFlagReceiver(u64 spurs_ea, u32 wid, u32 is_set);
++s32 cellSpursJoinTask2(u64 taskset_ea, u32 taskId, u64 exit_ea);
++s32 cellSpursTryJoinTask2(u64 taskset_ea, u32 taskId, u64 exit_ea);
++s32 cellSpursDestroyTaskset2(CellSpursTaskset* taskset);
++s32 cellSpursLFQueueDetachLv2EventQueue(u64 queue_ea);
+ s32 cellSpursLFQueueAttachLv2EventQueue(u64 queue_ea);
+ 
+ s32 cellSpursEventFlagSet(CellSpursEventFlag* eventFlag, u16 bits);
+-- 
+2.43.0
+
