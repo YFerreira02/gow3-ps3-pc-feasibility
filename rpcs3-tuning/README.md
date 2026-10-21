@@ -53,9 +53,24 @@ Las cifras usan solo los segundos de **juego real**: CPU al 70 % o más y menos 
 | v7-radeon530 | 10.7 | 13.5 | 8.2 | 34 de 49 | Peor: la GPU dedicada Radeon 530 rinde menos que la Vega 8. Descartada. |
 | v6-spurs4 | 12.7 | 14.2 | 10.4 | 52 de 78 | Igual que v3: limitar SPURS a 4 hilos no ayuda. CPU real en juego: ~2.1 GHz. |
 | v8-rsx1-spurs4 | 13.1 | 13.1 | 8.3 | 52 de 70 | Peor que v5: con 4 hilos SPURS se pierde lo ganado. CPU real en juego: **~1.9 GHz**. |
+| v5 (3), 15 W con apps abiertas | 13.0 | 13.7 | 6.7 | 69 de 76 | Edge y otras apps abiertas: RAM libre mínima **371 MB**. Muestra que la falta de RAM cuesta FPS y tirones. CPU ~1.8 GHz. |
+| **v5 (4), 20 W (UXTU)** | **17.0** | **17.0** | 10.4 | 55 de 80 | Límite de consumo subido a 20 W. CPU en juego **~2.4 GHz** (antes ~1.8–1.9), temperatura máx. 83.4 °C, sin freno térmico. RAM libre mínima 3.8 GB. Mejor resultado hasta ahora. |
 
-**Conclusión hasta ahora:** el mejor perfil es v5 (RSX de un hilo), con unos 15–17 FPS en juego real a 1280x720. Limitar los hilos SPURS no ayuda (v6, v8) y la Radeon 530 empeora (v7).
+**Conclusión hasta ahora:** el mejor resultado es **v5 + límite de consumo de 20 W**: unos **17 FPS** en juego real a 1280x720, con tramos de 19–21. Partimos de 12. Limitar los hilos SPURS no ayuda (v6, v8) y la Radeon 530 empeora (v7). Tener RAM libre importa: con Edge y otras apps abiertas, v5 cae a 13 FPS.
 
-**Hallazgo clave:** en juego, la CPU trabaja a solo **1.7–2.1 GHz**, por debajo incluso de su frecuencia base (2.1 GHz) y lejos de su turbo (3.7 GHz), aunque está al tope de uso, con cargador y en "Máximo rendimiento". Está limitada por consumo (unos 15 W) o por temperatura. Ese es ahora el mayor margen de mejora: los ajustes de RPCS3 ya dieron lo que podían.
+**Límite de consumo (2026-10-21):** HWiNFO mostró que, con 15 W, la CPU pasaba el 91 % del tiempo frenada por el límite STAPM, a 81 °C y sin freno térmico. Con Universal x86 Tuning Utility (perfil `GoW3 20W`) se subió el límite. Con él, el consumo llega a 20 W, la CPU sube de ~1.8 a ~2.4 GHz y la temperatura máxima es de 83.4 °C.
+
+| Ajuste de UXTU | Valor |
+|---|---|
+| Límite de temperatura de la APU | 85 °C |
+| Límite de la temperatura de la piel (STAPM) | 20 W |
+| Límite de potencia sostenida (Slow) | 22 W |
+| Límite de potencia rápida (Fast) | 25 W |
+| Perfil de impulso de AMD | Rendimiento |
+| Modo de impulso del procesador | Agresivo |
+| Modo de energía de Windows | Mejor rendimiento |
+| VRM, límites de frecuencia, PBO, Curve Optimizer, Super Resolución, opciones Radeon | Sin tocar |
+
+No se suben voltajes ni corrientes del VRM. El ajuste se pierde al reiniciar.
 
 **Consejo para medir:** tras cambiar ajustes de SPU, la primera sesión compila caché y sale más lenta. Si un perfil nuevo da cifras muy bajas, repítelo una vez.
