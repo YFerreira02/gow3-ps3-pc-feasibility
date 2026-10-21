@@ -4,6 +4,12 @@
 **Target / Objetivo:** Windows 11 x64, Vulkan 1.2 minimum, Ryzen 5 3500U + Vega 8, 10 GB RAM.
 **Goal / Meta:** investigate 50–60 FPS with adjustable resolution; not yet demonstrated.
 
+## Current track (2026-10-20) / Ruta actual
+
+The owner chose to play the PS3 edition through RPCS3 and tune it for this laptop. [`rpcs3-tuning/`](rpcs3-tuning/) holds a launcher, versioned per-game profiles, and FPS measurements. The standalone runtime below is paused as research: its retail executable is encrypted and this project does not decrypt it.
+
+El dueño decidió jugar la versión de PS3 con RPCS3 y optimizarla para este portátil. [`rpcs3-tuning/`](rpcs3-tuning/) contiene el lanzador, perfiles versionados del juego y mediciones de FPS. El runtime independiente descrito abajo queda en pausa como investigación: el ejecutable comercial está cifrado y este proyecto no lo descifra.
+
 ## Direction / Dirección
 
 The linked reference now redirects to SpartanPort, a PS4 Remastered x86-64 port that documents Vulkan 1.3. It cannot run the PS3 ISO in this project, and this PC reports Vulkan 1.2. See the [reference compatibility audit](docs/viability.md#reference-project-compatibility-audit).
