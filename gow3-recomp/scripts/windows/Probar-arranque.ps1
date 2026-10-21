@@ -33,6 +33,10 @@ $Data = Join-Path $Here 'gamedata'
 $Hdd0 = Join-Path $Data 'dev_hdd0'; $Hdd1 = Join-Path $Data 'dev_hdd1'
 $Logs = Join-Path $Here 'logs'
 foreach ($d in $Hdd0, $Hdd1, $Logs) { New-Item -ItemType Directory -Force $d | Out-Null }
+# Caché de disco (dev_hdd1) borrada en cada arranque: si el juego se cerró sin
+# terminar de escribirla, su índice queda en blanco y fios reintenta abrirlo sin
+# fin. Es solo una caché de velocidad; la consola también la vacía al cambiar de juego.
+Remove-Item -Recurse -Force (Join-Path $Hdd1 'cache') -ErrorAction SilentlyContinue
 $Stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $Log   = Join-Path $Logs "arranque_$Stamp.log"
 
