@@ -6,7 +6,8 @@
     Launch-GoW3.ps1 -Perfil v1-spu-mega -> ese perfil, con medicion
     Launch-GoW3.ps1 -Play                -> juega con el mejor perfil (best.txt), sin medir
 
-  Medicion: con el juego abierto, ve a la escena de prueba y pulsa F10.
+  Medicion: con el juego abierto, ve a la escena de prueba y pulsa F10 (Fn + F10 en portatil),
+  o usa inicio automatico (-AutoStart <segundos> o respondiendo al menu).
   Se graban FPS, CPU y RAM durante -Seconds segundos (120 por defecto) y suena un pitido al terminar.
   Al cerrar el juego se guarda el resumen y una copia del registro de RPCS3 en results\.
   Este script no toca los archivos del juego; solo cambia la config personalizada del juego
@@ -66,6 +67,14 @@ if ((Test-Path -LiteralPath $gameConfig) -and -not (Test-Path -LiteralPath $orig
 Copy-Item -LiteralPath $profileFile -Destination $gameConfig -Force
 Write-Host "Perfil aplicado: $Perfil" -ForegroundColor Green
 
+if (-not $Play -and $AutoStart -lt 0) {
+    Write-Host ''
+    Write-Host 'Como quieres iniciar la medicion?' -ForegroundColor Cyan
+    Write-Host '  - Pulsa Enter para usar la tecla F10 (en portatil: Fn + F10).'
+    Write-Host '  - O escribe un numero de segundos (ej. 90) para que empiece sola ese tiempo despues de que el juego muestre FPS.'
+    $answer = Read-Host 'Segundos (vacio = F10)'
+    $AutoStart = if ($answer -match '^\s*\d+\s*$') { [int]$answer } else { -1 }
+}
 $process = Start-Process -FilePath $rpcs3 -ArgumentList @('--no-gui', "`"$gamePath`"") -WorkingDirectory $EmulatorDir -PassThru
 
 if ($Play) {
@@ -106,7 +115,11 @@ $csv = Join-Path $runDir 'samples.csv'
 'elapsed_s,fps,cpu_pct,free_ram_mb' | Set-Content -LiteralPath $csv -Encoding ASCII
 
 Write-Host ''
-Write-Host "Ve a la escena de prueba y pulsa F10 para medir $Seconds segundos (pitido al empezar y al terminar)." -ForegroundColor Cyan
+if ($AutoStart -ge 0) {
+    Write-Host "La medicion empezara sola $AutoStart s despues de que el juego muestre FPS, y durara $Seconds s (pitido al empezar y al terminar)." -ForegroundColor Cyan
+} else {
+    Write-Host "Ve a la escena de prueba y pulsa F10 (o Fn + F10) para medir $Seconds segundos (pitido al empezar y al terminar)." -ForegroundColor Cyan
+}
 Write-Host 'Cuando termine la medicion, cierra el juego normalmente.'
 
 $culture = [System.Globalization.CultureInfo]::InvariantCulture
@@ -124,7 +137,9 @@ while (-not $process.HasExited) {
     $pressed = $down -and -not $keyWasDown
     $keyWasDown = $down
 
-    if ($pressed -and -not $measuring -and -not $done) {
+    if ($AutoStart -ge 0 -and -not $firstFps -and [Gow3Win]::FpsTitle([uint32]$process.Id)) { $firstFps = Get-Date }
+    $autoDue = $AutoStart -ge 0 -and $firstFps -and ((Get-Date) - $firstFps).TotalSeconds -ge $AutoStart
+    if (($pressed -or $autoDue) -and -not $measuring -and -not $done) {
         $measuring = $true
         $start = Get-Date
         [console]::Beep(880, 200)

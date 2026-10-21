@@ -11,7 +11,7 @@ Copia esta carpeta en `C:\Games\GoW3_Tuning` y cierra RPCS3 antes de usarla.
 
 | Archivo | Para qué |
 |---|---|
-| `Medir perfil.bat` | Elige un perfil, abre el juego y mide. En la escena de prueba pulsa **F10**: mide 120 s y suena un pitido al terminar. Luego cierra el juego. |
+| `Medir perfil.bat` | Elige un perfil, abre el juego y mide. En la escena de prueba pulsa **F10** (en portátil, **Fn + F10**), o elige al inicio que la medición empiece sola tras N segundos: mide 120 s y suena un pitido al terminar. Luego cierra el juego. |
 | `Jugar GoW3.bat` | Abre el juego con el mejor perfil hasta ahora (`best.txt`), sin medir. |
 | `Restaurar config original.bat` | Devuelve la configuración del juego a como estaba antes de la primera prueba. |
 
