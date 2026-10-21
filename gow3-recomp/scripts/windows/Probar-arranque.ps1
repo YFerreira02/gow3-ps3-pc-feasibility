@@ -1,35 +1,49 @@
-# Primer arranque de God of War III recompilado.
-# Monta la ISO (sin extraerla), ejecuta Gow3Recomp.exe con registro y lo cierra
-# solo al cabo de -Seconds. El registro queda en logs\ junto al .exe.
+# Arranque de prueba de God of War III recompilado (Gow3Recomp.exe).
+# - Usa la ISO montada (la monta si hace falta; no extrae nada).
+# - Guardados y caché en gamedata\ junto al .exe (la ISO es de solo lectura).
+# - Reutiliza de RPCS3 el firmware (dev_flash) y las DLL de FFmpeg para los videos.
+# - Lo cierra solo al cabo de -Seconds y deja el registro en logs\.
 param(
-    [string]$Iso = 'C:\Games\God_Of_War_3\God of War III (Europe) (En,Fr,De,Es,It,Nl,Pt,Pl,Ru).iso',
-    [int]$Seconds = 90
+    [string]$Iso    = 'C:\Games\God_Of_War_3\God of War III (Europe) (En,Fr,De,Es,It,Nl,Pt,Pl,Ru).iso',
+    [string]$Rpcs3  = 'C:\Games\Emulador',
+    [int]$Seconds   = 120
 )
 $ErrorActionPreference = 'Stop'
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Exe  = Join-Path $Here 'Gow3Recomp.exe'
-$Logs = Join-Path $Here 'logs'
-New-Item -ItemType Directory -Force $Logs | Out-Null
-$Stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$Log   = Join-Path $Logs "arranque_$Stamp.log"
+$Elf  = Join-Path $Here 'EBOOT.elf'
+foreach ($f in $Exe, $Elf) { if (-not (Test-Path $f)) { throw "Falta $f" } }
 
-# 1. Montar la ISO, o reutilizarla si ya está montada.
+# 1. Disco: la ISO montada como unidad.
 $img = Get-DiskImage -ImagePath $Iso
 if (-not $img.Attached) { $img = Mount-DiskImage -ImagePath $Iso -Access ReadOnly -PassThru }
 $letter = ($img | Get-Volume).DriveLetter
 if (-not $letter) { throw 'No se pudo montar la ISO.' }
 $Disc = "${letter}:\"
-if (-not (Test-Path (Join-Path $Disc 'PS3_GAME\USRDIR\EBOOT.BIN'))) { throw "La ISO montada en $Disc no tiene PS3_GAME\USRDIR." }
+if (-not (Test-Path (Join-Path $Disc 'PS3_GAME\USRDIR\GAME.PSARC'))) { throw "La unidad $Disc no tiene el juego." }
 
-# 2. Lanzar el juego. El EBOOT descifrado va al lado del .exe.
-$env:PS3_VFS_ROOT = $Disc
-$env:PS3_VERBOSE  = '1'
-$elf = Join-Path $Here 'EBOOT.elf'
-$p = Start-Process -FilePath $Exe -ArgumentList "`"$elf`"" -WorkingDirectory $Here `
+# 2. Carpetas escribibles y registro.
+$Data = Join-Path $Here 'gamedata'
+$Hdd0 = Join-Path $Data 'dev_hdd0'; $Hdd1 = Join-Path $Data 'dev_hdd1'
+$Logs = Join-Path $Here 'logs'
+foreach ($d in $Hdd0, $Hdd1, $Logs) { New-Item -ItemType Directory -Force $d | Out-Null }
+$Stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$Log   = Join-Path $Logs "arranque_$Stamp.log"
+
+# 3. Entorno del runtime.
+$env:PS3_VFS_ROOT  = $Disc
+$env:PS3_HDD0_ROOT = $Hdd0
+$env:PS3_HDD1_ROOT = $Hdd1
+if (Test-Path (Join-Path $Rpcs3 'dev_flash')) { $env:PS3_DEV_FLASH = Join-Path $Rpcs3 'dev_flash' }
+if (Test-Path (Join-Path $Rpcs3 'avcodec-63.dll')) { $env:PATH = "$Rpcs3;$env:PATH" }   # FFmpeg de RPCS3
+$env:PS3_VERBOSE = '1'
+
+# 4. Lanzar y esperar.
+$p = Start-Process -FilePath $Exe -ArgumentList "`"$Elf`"" -WorkingDirectory $Here `
      -RedirectStandardOutput $Log -RedirectStandardError "$Log.err" -PassThru
-Write-Host "Gow3Recomp en marcha (PID $($p.Id)), disco en $Disc, registro en $Log"
-
-# 3. Cerrar al cabo de $Seconds si sigue vivo.
-if (-not $p.WaitForExit($Seconds * 1000)) { Stop-Process -Id $p.Id -Force; Write-Host "Cerrado tras $Seconds s." }
-else { Write-Host "Terminó solo (código $($p.ExitCode))." }
-"exit=$($p.ExitCode) seconds=$Seconds disc=$Disc" | Out-File (Join-Path $Logs "arranque_$Stamp.txt")
+Write-Host "Gow3Recomp en marcha (PID $($p.Id)). Disco $Disc. Registro: $Log"
+Write-Host "Se cerrará solo en $Seconds s (puedes cerrarlo antes)."
+if (-not $p.WaitForExit($Seconds * 1000)) { Stop-Process -Id $p.Id -Force; $estado = "cerrado tras $Seconds s" }
+else { $estado = "terminó solo, código $($p.ExitCode)" }
+"$estado | disco=$Disc | $(Get-Date -Format s)" | Out-File (Join-Path $Logs "arranque_$Stamp.txt") -Encoding utf8
+Write-Host "Listo: $estado."

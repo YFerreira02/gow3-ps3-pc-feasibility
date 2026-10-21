@@ -83,6 +83,11 @@ message(STATUS "Lifted sources:  ${RECOMP_SOURCE_COUNT} file(s)")
 # different reason. add_subdirectory hands all of that over with the target.
 add_subdirectory("${PS3RECOMP_DIR}" "${CMAKE_BINARY_DIR}/ps3recomp_sdk"
                  EXCLUDE_FROM_ALL)
+# MinGW headers hide Windows 8+ APIs (GetCurrentThreadStackLimits) unless the
+# target version says so; MSVC's SDK defaults to the newest.
+if(MINGW)
+    target_compile_definitions(ps3recomp_runtime PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
+endif()
 
 # ---------------------------------------------------------------------------
 # The HLE NID table

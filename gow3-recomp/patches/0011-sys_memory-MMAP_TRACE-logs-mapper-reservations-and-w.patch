@@ -1,0 +1,46 @@
+From 7dcf48547faf86f3c7c18d66761e8b7d3478192c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 21 Oct 2026 11:16:47 -0500
+Subject: [PATCH 11/11] sys_memory: MMAP_TRACE logs mapper reservations and why
+ one is refused
+
+---
+ runtime/syscalls/sys_memory.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/runtime/syscalls/sys_memory.c b/runtime/syscalls/sys_memory.c
+index 66eef25..f1e37b1 100644
+--- a/runtime/syscalls/sys_memory.c
++++ b/runtime/syscalls/sys_memory.c
+@@ -5,6 +5,8 @@
+ #include "sys_memory.h"
+ #include <stdio.h>
+ #include <string.h>
++#include <stdlib.h>
++#include <errno.h>
+ #include "../../include/ps3emu/log_first.h"   /* relative: tools/test_*memory*.py compile this file alone */
+ 
+ /* ---------------------------------------------------------------------------
+@@ -326,8 +328,10 @@ static uint32_t mapper_address(uint64_t requested, uint64_t alignment)
+         if (next == addr) break;
+         addr = (next + alignment - 1u) & ~(alignment - 1u);
+     }
+-    if (!size || addr + size > SYS_MAPPER_END || vm_commit((uint32_t)addr, (uint32_t)size) != CELL_OK)
++    if (!size || addr + size > SYS_MAPPER_END || vm_commit((uint32_t)addr, (uint32_t)size) != CELL_OK) {
++        if (getenv("MMAP_TRACE")) fprintf(stderr, "[mmapper] reject addr=0x%llx size=0x%llx errno=%d vm_base=%p\n", (unsigned long long)addr, (unsigned long long)size, errno, (void*)vm_base);
+         return 0;
++    }
+     s_mapper_bump_ptr = (uint32_t)(addr + size);
+     return (uint32_t)addr;
+ }
+@@ -350,6 +354,7 @@ int64_t sys_mmapper_allocate_address(ppu_context* ctx)
+         r->start = r->next = addr; r->end = s_mapper_bump_ptr;
+     }
+     bump_unlock();
++    if (getenv("MMAP_TRACE")) fprintf(stderr, "[mmapper] allocate_address size=0x%llx align=0x%llx out=0x%x -> addr=0x%x\n", (unsigned long long)size, (unsigned long long)alignment, out, addr);
+     if (!addr) return (int64_t)(int32_t)CELL_ENOMEM;
+     if (out) write_be32(out, addr);
+     return CELL_OK;
+-- 
+2.43.0
+
