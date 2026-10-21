@@ -8,7 +8,8 @@ param(
     [string]$Rpcs3  = 'C:\Games\Emulador',
     [int]$Seconds   = 180,
     [string]$Tag    = '',
-    [int]$ParkWaitMs = 30000
+    [int]$ParkWaitMs = 30000,
+    [string]$MaxCont = '7=3,8=3,9=3,10=3'
 )
 $ErrorActionPreference = 'Stop'
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -57,6 +58,10 @@ Remove-Item Env:PS3_SAMPLE -ErrorAction SilentlyContinue
 # adelante (por defecto del juego: 2000 ms). Más largo = distinguir 'lento' de 'nunca'.
 $env:GCM_PARK_WAIT_MS = "$ParkWaitMs"
 $env:GCM_HOLD_LOG = '1'      # registra cada vez que la GPU sale de un aparcamiento
+# Cuántas SPU puede usar a la vez cada lista de trabajos Wws (por defecto 1).
+# wid 7 = RenderJobs, 8-10 = EDGE0-2 (geometría). En Ascension, repartir así sus
+# listas llevó el menú de 14 a 33 fps; ponerlo en todas a la vez lo colgaba.
+if ($MaxCont) { $env:SPURS_MAXCONT = $MaxCont } else { Remove-Item Env:SPURS_MAXCONT -ErrorAction SilentlyContinue }
 
 # 4. Lanzar y esperar.
 $p = Start-Process -FilePath $Exe -ArgumentList "`"$Elf`"" -WorkingDirectory $Here `
@@ -74,5 +79,5 @@ if (-not $p.WaitForExit($Seconds * 1000)) {
     if (-not $p.HasExited) { & taskkill.exe /PID $p.Id /T /F | Out-Null }
     $estado = "cerrado tras $Seconds s"
 } else { $estado = "terminó solo, código $($p.ExitCode)" }
-"$estado | disco=$Disc | tag=$Tag | SPU_OVL_OFF=$env:SPU_OVL_OFF | park=$ParkWaitMs | $(Get-Date -Format s)" | Out-File (Join-Path $Logs "arranque_$Stamp.txt") -Encoding utf8
+"$estado | disco=$Disc | tag=$Tag | SPU_OVL_OFF=$env:SPU_OVL_OFF | park=$ParkWaitMs | maxcont=$MaxCont | $(Get-Date -Format s)" | Out-File (Join-Path $Logs "arranque_$Stamp.txt") -Encoding utf8
 Write-Host "Listo: $estado."
