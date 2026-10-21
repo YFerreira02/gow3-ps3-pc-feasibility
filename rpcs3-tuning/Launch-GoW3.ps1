@@ -8,6 +8,7 @@
 
   Medicion: con el juego abierto, ve a la escena de prueba y pulsa F10 (Fn + F10 en portatil),
   o usa inicio automatico (-AutoStart <segundos> o respondiendo al menu).
+  Al terminar de medir, el lanzador cierra el juego (usa -KeepOpen para dejarlo abierto).
   Se graban FPS, CPU y RAM durante -Seconds segundos (120 por defecto) y suena un pitido al terminar.
   Al cerrar el juego se guarda el resumen y una copia del registro de RPCS3 en results\.
   Este script no toca los archivos del juego; solo cambia la config personalizada del juego
@@ -16,6 +17,8 @@
 param(
     [string]$Perfil,
     [int]$Seconds = 120,
+    [int]$AutoStart = -1,
+    [switch]$KeepOpen,
     [switch]$Play,
     [string]$EmulatorDir = 'C:\Games\Emulador',
     [string]$Serial = 'BCES00510'
@@ -70,10 +73,10 @@ Write-Host "Perfil aplicado: $Perfil" -ForegroundColor Green
 if (-not $Play -and $AutoStart -lt 0) {
     Write-Host ''
     Write-Host 'Como quieres iniciar la medicion?' -ForegroundColor Cyan
-    Write-Host '  - Pulsa Enter para usar la tecla F10 (en portatil: Fn + F10).'
-    Write-Host '  - O escribe un numero de segundos (ej. 90) para que empiece sola ese tiempo despues de que el juego muestre FPS.'
-    $answer = Read-Host 'Segundos (vacio = F10)'
-    $AutoStart = if ($answer -match '^\s*\d+\s*$') { [int]$answer } else { -1 }
+    Write-Host '  La medicion empieza sola N segundos despues de que el juego arranca (tiempo para cargar tu partida y llegar a la escena).'
+    Write-Host '  Al terminar, el lanzador cierra el juego solo. F10 (Fn + F10) tambien sirve para empezar antes.'
+    $answer = Read-Host 'Segundos de espera (Enter = 120)'
+    $AutoStart = if ($answer -match '^\s*\d+\s*$') { [int]$answer } else { 120 }
 }
 $process = Start-Process -FilePath $rpcs3 -ArgumentList @('--no-gui', "`"$gamePath`"") -WorkingDirectory $EmulatorDir -PassThru
 
@@ -165,7 +168,16 @@ while (-not $process.HasExited) {
             $measuring = $false
             $done = $true
             [console]::Beep(660, 200); [console]::Beep(660, 200)
-            Write-Host 'Medicion terminada. Ya puedes cerrar el juego.' -ForegroundColor Green
+            if ($KeepOpen) {
+                Write-Host 'Medicion terminada. Ya puedes cerrar el juego.' -ForegroundColor Green
+            } else {
+                Write-Host 'Medicion terminada. Cerrando el juego...' -ForegroundColor Green
+                # Cierre normal de la ventana; si no responde en 20 s, se fuerza.
+                try { $process.CloseMainWindow() | Out-Null } catch { }
+                if (-not $process.WaitForExit(20000)) {
+                    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+                }
+            }
         }
         $tick++
     }
