@@ -12,6 +12,12 @@ $ErrorActionPreference = 'Stop'
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Exe  = Join-Path $Here 'Gow3Recomp.exe'
 $Elf  = Join-Path $Here 'EBOOT.elf'
+# Primera vez (o versión nueva): descomprimir Gow3Recomp.zip junto al script.
+$Zip = Join-Path $Here 'Gow3Recomp.zip'
+if ((Test-Path $Zip) -and (-not (Test-Path $Exe) -or (Get-Item $Zip).LastWriteTime -gt (Get-Item $Exe).LastWriteTime)) {
+    Expand-Archive -Path $Zip -DestinationPath $Here -Force
+    (Get-Item $Exe).LastWriteTime = Get-Date
+}
 foreach ($f in $Exe, $Elf) { if (-not (Test-Path $f)) { throw "Falta $f" } }
 
 # 1. Disco: la ISO montada como unidad.

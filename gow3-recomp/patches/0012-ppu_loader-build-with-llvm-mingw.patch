@@ -1,0 +1,51 @@
+From 2a28471024f529f16de8e58d2af7035742cf34b4 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 21 Oct 2026 11:23:06 -0500
+Subject: [PATCH] ppu_loader: build with llvm-mingw
+
+The stack sampler's SEH __try is MSVC-only (probe with IsBadReadPtr on
+MinGW), and the poke diagnostic declared ppu_resv_break extern "C" while
+the definition below is static inline and expects the lock held; it now
+calls ppu_resv_break_store, the locked entry point.
+---
+ runtime/ppu/ppu_loader.cpp | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/runtime/ppu/ppu_loader.cpp b/runtime/ppu/ppu_loader.cpp
+index ee96672..eb01005 100644
+--- a/runtime/ppu/ppu_loader.cpp
++++ b/runtime/ppu/ppu_loader.cpp
+@@ -627,7 +627,12 @@ static uint32_t samp_stack_guest(HANDLE h, const CONTEXT* c)
+     const uintptr_t* sp = (const uintptr_t*)c->Rsp;
+     for (int i = 0; i < 512; i++) {          /* 4 KB of stack */
+         uintptr_t v;
++#ifdef _MSC_VER
+         __try { v = sp[i]; } __except (1) { return 0; }
++#else   /* MinGW: no SEH __try; probe the page instead */
++        if (IsBadReadPtr(&sp[i], sizeof v)) return 0;
++        v = sp[i];
++#endif
+         uint32_t g = samp_lookup(v);
+         if (g) return g;
+     }
+@@ -701,7 +706,7 @@ static DWORD WINAPI samp_thread(LPVOID p)
+  * Writing the word leaves memory self-consistent: lwarx, the CAS and the
+  * polling reader all see the same thing, so the guest behaves as it would if
+  * whatever should have cleared the counter had done so. */
+-extern "C" void ppu_resv_break(uint64_t ea);
++extern "C" void ppu_resv_break_store(uint64_t ea);
+ static DWORD WINAPI poke_thread(LPVOID p)
+ {
+     const uint32_t ea  = (uint32_t)(uintptr_t)p;
+@@ -715,7 +720,7 @@ static DWORD WINAPI poke_thread(LPVOID p)
+     for (;;) {
+         if (vm_base) {
+             __atomic_store_n((uint32_t*)(vm_base + ea), be, __ATOMIC_SEQ_CST);
+-            ppu_resv_break(ea);   /* a real writer would break reservations too */
++            ppu_resv_break_store(ea);   /* a real writer would break reservations too */
+         }
+         Sleep(ms);
+     }
+-- 
+2.43.0
+

@@ -1,0 +1,29 @@
+From c2ea3f81d888f73bd82c93d3799211011fee3614 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 21 Oct 2026 11:23:31 -0500
+Subject: [PATCH] boot_main: install the getenv cache only under MSVC
+
+MinGW's CRT import library already defines __imp_getenv (duplicate symbol
+at link); there getenv stays the CRT's.
+---
+ runtime/ppu/tests/boot_main.cpp | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
+index 6c9c2eb..f31d125 100644
+--- a/runtime/ppu/tests/boot_main.cpp
++++ b/runtime/ppu/tests/boot_main.cpp
+@@ -166,7 +166,10 @@ char* __cdecl cached_getenv(const char* name)
+     return (char*)val;
+ }
+ }
++#ifdef _MSC_VER
+ extern "C" char* (__cdecl* __imp_getenv)(const char*) = cached_getenv;
++#endif  /* MinGW defines __imp_getenv in its CRT import library: the cache is
++         * not installed there and getenv stays the CRT's (slower, correct). */
+ 
+ /* Last-chance crash reporter: vm_base accesses are bounds-guarded, so a real
+  * access violation means a HOST pointer deref (e.g. a bad function pointer or a
+-- 
+2.43.0
+

@@ -301,6 +301,11 @@ if(WIN32)
         # for; clang-cl's lld-link found no other library that defines them.
         dxguid
     )
+    # MSVC pulls these in through #pragma comment(lib) in the D3D12 backend;
+    # MinGW's linker ignores those pragmas.
+    if(MINGW)
+        target_link_libraries(${PROJECT_NAME} PRIVATE d3d12 dxgi d3dcompiler_47 xinput1_4)  # xinput1_4 ships with Windows 10/11; xinput1_3 needs the old DirectX runtime
+    endif()
 endif()
 
 # RPCS3's RSX as the renderer (ps3recomp gpu/, v2): links ps3rsx and RPCS3's
