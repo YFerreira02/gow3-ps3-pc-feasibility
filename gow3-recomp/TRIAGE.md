@@ -147,3 +147,12 @@ interna. El juego no carga PRX propias del disco: en el registro no aparece ning
   cuadros, ~175.000 paquetes de dibujo. Con ✕ pulsada por PAD_FILE a ~110 y
   ~140 s el juego avanza y abre CINEMATICS/OPENINGCREDITS.M2V (la segunda
   cinemática, tras SMLOGO). 1-18 fps, irregular.
+- 22:21–22:55: la parada tras la intro sigue en 4 de 5 pruebas (el usuario la
+  vio en sus dos pruebas manuales). En 22:55, con el volcado nuevo de las
+  cadenas Wws por SPU ([wl-pipe]), durante la parada ninguna SPU tiene trabajos
+  a medias y las máscaras pendientes están a 0; las listas wid 7 y 8 están en 0
+  (vacías), wid 9 en 0x12, wid 10 en 1. Así que esta variante no es un trabajo
+  varado en un LS: falta un trabajo que nunca llega a la lista o una bajada del
+  contador del cuadro. Siguiente: traza atómica de 0x649E80 con el volcado.
+- Rendimiento: con el cerrojo de líneas corregido para MinGW, la parte tras la
+  intro pasa de ~20,6 a ~22,2 fps de media (antes de pararse).

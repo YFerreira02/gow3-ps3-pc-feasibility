@@ -743,7 +743,7 @@ index f2b4c119..224323e9 100644
      /* PAD_AUTOPRESS: headless bring-up input -- pulse CROSS then START every few
       * seconds of polling so boot screens that wait for input advance without a
 diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
-index 015913a8..0952075a 100644
+index 015913a8..039204e7 100644
 --- a/libs/spurs/cellSpurs.c
 +++ b/libs/spurs/cellSpurs.c
 @@ -68,7 +68,10 @@ typedef struct {
@@ -1387,7 +1387,7 @@ index 015913a8..0952075a 100644
          slot->busy = 0;
          WakeAllConditionVariable(&si->wake);
      }
-@@ -1689,56 +2043,178 @@ static DWORD WINAPI spurs_pm_worker(LPVOID p)
+@@ -1689,56 +2043,180 @@ static DWORD WINAPI spurs_pm_worker(LPVOID p)
      return 0;
  }
  
@@ -1473,8 +1473,10 @@ index 015913a8..0952075a 100644
 +              /* The scheduler's own view: each SPU slot, and per workload the
 +               * SPUs it holds, its readyCount, signal and idle back-off. */
 +              for (u32 k = 0; k < si->nspus; k++)
-+                  fprintf(stderr, "[wl-dump] t=%llu slot %u busy=%d wid=%u\n", now, k,
-+                          si->slots[k].busy, si->slots[k].wid);
++                  fprintf(stderr, "[wl-dump] t=%llu slot %u busy=%d wid=%u pend=0x%X\n", now, k,
++                          si->slots[k].busy, si->slots[k].wid, si->slots[k].pend_mask);
++              { extern void spurs_pm_dump_pipelines(uint32_t, unsigned long long);
++                spurs_pm_dump_pipelines(ea, now); }
 +              for (u32 w = 0; w < (si->is2 ? SPURS_MAX_WID : 16u); w++)
 +                  if (s_workloads[w].in_use && s_workloads[w].spurs_ea == ea)
 +                      fprintf(stderr, "[wl-dump] t=%llu wid=%u state=%u active=%u ready=%u sig=%d idle=%u enabled=%d\n",
@@ -1584,7 +1586,7 @@ index 015913a8..0952075a 100644
                  ef_line_end(ea);
                  slot->busy = 1;
                  WakeAllConditionVariable(&si->wake);
-@@ -1785,7 +2261,7 @@ static s32 spurs_scheduler_stop(struct SpursInst* si, u32 ea)
+@@ -1785,7 +2263,7 @@ static s32 spurs_scheduler_stop(struct SpursInst* si, u32 ea)
      AcquireSRWLockExclusive(&si->lock);
      if (si->ea != ea || !si->kernel_live) { ReleaseSRWLockExclusive(&si->lock); return CELL_SPURS_CORE_ERROR_STAT; }
      if (si->stopping || si->starting) { ReleaseSRWLockExclusive(&si->lock); return CELL_SPURS_CORE_ERROR_BUSY; }
@@ -1593,7 +1595,7 @@ index 015913a8..0952075a 100644
          if (si->active[wid]) { ReleaseSRWLockExclusive(&si->lock); return CELL_SPURS_CORE_ERROR_BUSY; }
      si->stopping = 1; WakeAllConditionVariable(&si->wake);
      ReleaseSRWLockExclusive(&si->lock);
-@@ -1808,7 +2284,7 @@ static void spurs_scheduler_forget(u32 wid)
+@@ -1808,7 +2286,7 @@ static void spurs_scheduler_forget(u32 wid)
  static void spurs_scheduler_retire(u32 ea)
  {
      AcquireSRWLockExclusive(&s_workload_registry_lock);
@@ -1602,7 +1604,7 @@ index 015913a8..0952075a 100644
          if (s_workloads[wid].in_use && s_workloads[wid].spurs_ea == ea) {
              memset(&s_workloads[wid], 0, sizeof(s_workloads[wid]));
              spurs_scheduler_forget(wid);
-@@ -1820,7 +2296,7 @@ s32 cellSpursReadyCountStore(CellSpurs* spurs, CellSpursWorkloadId wid,
+@@ -1820,7 +2298,7 @@ s32 cellSpursReadyCountStore(CellSpurs* spurs, CellSpursWorkloadId wid,
                               u32 value)
  {
      if (!spurs) return CELL_SPURS_CORE_ERROR_NULL_POINTER;
@@ -1611,7 +1613,7 @@ index 015913a8..0952075a 100644
      struct SpursInst* si;
      s32 rc = spurs_api_lock((u32)(uintptr_t)spurs, &si);
      if (rc) return rc;
-@@ -1830,7 +2306,7 @@ s32 cellSpursReadyCountStore(CellSpurs* spurs, CellSpursWorkloadId wid,
+@@ -1830,7 +2308,7 @@ s32 cellSpursReadyCountStore(CellSpurs* spurs, CellSpursWorkloadId wid,
  
      s_workloads[wid].readyCount = value;
      /* The real store: the instance byte the kernel (poll thread) watches. */
@@ -1620,7 +1622,7 @@ index 015913a8..0952075a 100644
      {   static int _n = 0;
          if (_n < 32)
              printf("[cellSpurs] ReadyCountStore(wid=%u, value=%u)\n", wid, value);
-@@ -1846,7 +2322,7 @@ static s32 spurs_ready_exchange(CellSpurs* spurs, CellSpursWorkloadId wid,
+@@ -1846,7 +2324,7 @@ static s32 spurs_ready_exchange(CellSpurs* spurs, CellSpursWorkloadId wid,
                                   u32* old, u32 compare, u32 value, int conditional)
  {
      if (!spurs || !old) return CELL_SPURS_CORE_ERROR_NULL_POINTER;
@@ -1629,7 +1631,7 @@ index 015913a8..0952075a 100644
      struct SpursInst* si;
      s32 rc = spurs_api_lock((u32)(uintptr_t)spurs, &si);
      if (rc) return rc;
-@@ -1854,9 +2330,9 @@ static s32 spurs_ready_exchange(CellSpurs* spurs, CellSpursWorkloadId wid,
+@@ -1854,9 +2332,9 @@ static s32 spurs_ready_exchange(CellSpurs* spurs, CellSpursWorkloadId wid,
          spurs_api_unlock(si); return CELL_SPURS_CORE_ERROR_SRCH;
      }
      spu_lockline_lock();
@@ -1641,7 +1643,7 @@ index 015913a8..0952075a 100644
          s_workloads[wid].readyCount = value;
          ef_line_end(si->ea);
      } else spu_lockline_unlock();
-@@ -3050,7 +3526,7 @@ s32 cellSpursGetWorkloadInfo(u64 spurs_ea, u32 wid, u64 info_ea)
+@@ -3050,7 +3528,7 @@ s32 cellSpursGetWorkloadInfo(u64 spurs_ea, u32 wid, u64 info_ea)
  
      if (!spurs_ea || !info_ea)
          return CELL_SPURS_CORE_ERROR_NULL_POINTER;
@@ -1650,7 +1652,7 @@ index 015913a8..0952075a 100644
          return CELL_SPURS_CORE_ERROR_INVAL;
  
      /* CellSpursWorkloadInfo is a GUEST out-buffer (cell/spurs/workload_types.h),
-@@ -3071,13 +3547,13 @@ s32 cellSpursGetWorkloadInfo(u64 spurs_ea, u32 wid, u64 info_ea)
+@@ -3071,13 +3549,13 @@ s32 cellSpursGetWorkloadInfo(u64 spurs_ea, u32 wid, u64 info_ea)
      /* nameClass/nameInstance (0x18/0x1C): not tracked -> left 0 by the zero above. */
  
      u32 se = (u32)spurs_ea;
@@ -1669,7 +1671,7 @@ index 015913a8..0952075a 100644
      return CELL_OK;
  }
  
-@@ -3336,6 +3812,36 @@ s32 _cellSpursLFQueueInitialize(u64 owner_ea, u64 queue_ea, u64 buffer_ea,
+@@ -3336,6 +3814,36 @@ s32 _cellSpursLFQueueInitialize(u64 owner_ea, u64 queue_ea, u64 buffer_ea,
      uint32_t q = (uint32_t)queue_ea;
      for (uint32_t o = 0; o < 128; o += 4) vm_write32(q + o, 0);
  
@@ -1706,7 +1708,7 @@ index 015913a8..0952075a 100644
      /* W3 at +0x0C is the ring modulus the consumer reduces indices by: the
       * empty test is (W1-W0) mod 2*W3 and the buffer slot is index mod W3
       * (derived at 0x12914..0x129B8). Leaving it zero degenerated both and made
-@@ -3363,6 +3869,121 @@ s32 _cellSpursLFQueueInitialize(u64 owner_ea, u64 queue_ea, u64 buffer_ea,
+@@ -3363,6 +3871,121 @@ s32 _cellSpursLFQueueInitialize(u64 owner_ea, u64 queue_ea, u64 buffer_ea,
      return CELL_OK;
  }
  
@@ -9863,7 +9865,7 @@ index 1cdfe488..579a22f0 100644
          (unsigned long long)fp, args_ea, image_id);
      if (args_ea) { extern uint8_t* vm_base; const uint8_t* c = vm_base + args_ea;
 diff --git a/runtime/spu/spurs_policy.c b/runtime/spu/spurs_policy.c
-index 5d1c63de..f076e59f 100644
+index 5d1c63de..f03e7ebe 100644
 --- a/runtime/spu/spurs_policy.c
 +++ b/runtime/spu/spurs_policy.c
 @@ -33,9 +33,33 @@
@@ -9893,15 +9895,14 @@ index 5d1c63de..f076e59f 100644
 +
  /* Counters the intercepts in spu_channels.c maintain for the CURRENT run
   * (per worker, including the exit classification used by the caller). */
--SPU_THREAD_LOCAL volatile unsigned g_spurs_pm_polls = 0;   /* selectWorkload calls this run */
-+SPU_THREAD_LOCAL volatile unsigned g_spurs_pm_polls = 0;
+ SPU_THREAD_LOCAL volatile unsigned g_spurs_pm_polls = 0;   /* selectWorkload calls this run */
 +/* 1 when the run left a job in the Wws pipeline (LS 0x12C0..0x12CF), see
 + * spurs_sticky in cellSpurs.c. */
-+SPU_THREAD_LOCAL volatile unsigned g_spurs_pm_pending = 0;   /* selectWorkload calls this run */
++SPU_THREAD_LOCAL volatile unsigned g_spurs_pm_pending = 0;
  SPU_THREAD_LOCAL volatile unsigned g_spurs_pm_exited = 0;  /* set when exitToKernel was taken */
  SPU_THREAD_LOCAL volatile unsigned g_wws_batch_gets = 0;   /* loadCommands (LS 0xC00) fetch count, spu_dma.h */
  
-@@ -43,14 +67,15 @@ SPU_THREAD_LOCAL volatile unsigned g_wws_batch_gets = 0;   /* loadCommands (LS 0
+@@ -43,16 +67,41 @@ SPU_THREAD_LOCAL volatile unsigned g_wws_batch_gets = 0;   /* loadCommands (LS 0
   * from different instances must never share local store or pipeline state.
   * Each slot lock also serializes direct callers of this existing API. */
  #define SPURS_PM_INSTANCES 4
@@ -9918,8 +9919,34 @@ index 5d1c63de..f076e59f 100644
 +    struct PmSlot slots[SPURS_PM_MAX_WKL][6];
  } s_pm_instances[SPURS_PM_INSTANCES];
  static SRWLOCK s_pm_directory_lock = SRWLOCK_INIT;
++/* SPURS_WLDUMP companion: the Wws pipeline words (LS 0x12A0..0x12DF) of every
++ * resident policy context of instance `ea` that is not idle, read without the
++ * slot lock (a diagnostic; a running context may print mid-update). */
++void spurs_pm_dump_pipelines(uint32_t ea, unsigned long long now)
++{
++    for (unsigned i = 0; i < SPURS_PM_INSTANCES; i++) {
++        struct PmInstance* pi = &s_pm_instances[i];
++        if (!pi->used || pi->ea != ea) continue;
++        for (unsigned w = 0; w < SPURS_PM_MAX_WKL; w++)
++            for (unsigned l = 0; l < 6; l++) {
++                spu_context* c = pi->slots[w][l].ctx;
++                if (!c) continue;
++                const uint8_t* L = c->ls; uint32_t v[16]; int busy = 0;
++                for (unsigned k = 0; k < 16; k++) {
++                    const unsigned o = 0x12A0 + 4 * k;
++                    v[k] = ((uint32_t)L[o] << 24) | ((uint32_t)L[o+1] << 16) | ((uint32_t)L[o+2] << 8) | L[o+3];
++                    if (k >= 8 && k < 12 && v[k] && v[k] != 0xFFFFFFFFu) busy = 1;
++                }
++                if (!busy) continue;
++                fprintf(stderr, "[wl-pipe] t=%llu wid=%u spu=%u 12A0=%08X %08X %08X %08X 12C0=%08X %08X %08X %08X 12D0=%08X %08X %08X %08X\n",
++                        now, w, l, v[0], v[1], v[2], v[3], v[8], v[9], v[10], v[11], v[12], v[13], v[14], v[15]);
++            }
++    }
++}
  static CONDITION_VARIABLE s_pm_directory_wake;
-@@ -97,7 +122,7 @@ static void policy_slot_release(struct PmSlot* slot)
+ static struct PmSlot* policy_slot(uint32_t ea, uint32_t wid, uint32_t lane)
+ {
+@@ -97,7 +146,7 @@ static void policy_slot_release(struct PmSlot* slot)
   * a direct caller that still owns a reference makes removal BUSY instead. */
  int spurs_policy_release_workload(uint32_t ea, uint32_t wid)
  {
@@ -9928,7 +9955,7 @@ index 5d1c63de..f076e59f 100644
      AcquireSRWLockExclusive(&s_pm_directory_lock);
      for (unsigned i = 0; i < SPURS_PM_INSTANCES; i++) {
          struct PmInstance* pi = &s_pm_instances[i];
-@@ -133,7 +158,7 @@ void spurs_policy_release_instance(uint32_t ea)
+@@ -133,7 +182,7 @@ void spurs_policy_release_instance(uint32_t ea)
          pi->retiring = 1;
          while (pi->users)
              SleepConditionVariableSRW(&s_pm_directory_wake, &s_pm_directory_lock, INFINITE, 0);
@@ -9937,7 +9964,7 @@ index 5d1c63de..f076e59f 100644
              struct PmSlot* slot = &pi->slots[w][n];
              AcquireSRWLockExclusive(&slot->lock);
              if (slot->ctx) {
-@@ -171,7 +196,6 @@ int spu_run_policy_module(spu_lifted_entry_fn entry, int image_id,
+@@ -171,7 +220,6 @@ int spu_run_policy_module(spu_lifted_entry_fn entry, int image_id,
       * never progress its claim/stage pipeline). Image + context init happen
       * once; re-entries keep LS and only refresh the entry registers and the
       * (possibly game-updated) kernel-context fields. */
@@ -9945,7 +9972,7 @@ index 5d1c63de..f076e59f 100644
      if (wid >= SPURS_PM_MAX_WKL || spu_num >= 6) return -1;
      struct PmSlot* resident = policy_slot(spurs_ea, wid, spu_num);
      if (!resident) return -1;
-@@ -265,6 +289,7 @@ int spu_run_policy_module(spu_lifted_entry_fn entry, int image_id,
+@@ -265,6 +313,7 @@ int spu_run_policy_module(spu_lifted_entry_fn entry, int image_id,
      KBE32(0x1E0, SPURS_PM_EXIT_TO_KERNEL_LS);
      KBE32(0x1E4, SPURS_PM_SELECT_WORKLOAD_LS);
  #undef KBE32
@@ -9953,7 +9980,7 @@ index 5d1c63de..f076e59f 100644
  
      /* Entry registers per cellSpursModuleEntry. */
      ctx->gpr[0]._u32[0] = SPURS_PM_EXIT_TO_KERNEL_LS;  /* return-to-kernel link */
-@@ -289,6 +314,8 @@ int spu_run_policy_module(spu_lifted_entry_fn entry, int image_id,
+@@ -289,6 +338,8 @@ int spu_run_policy_module(spu_lifted_entry_fn entry, int image_id,
  
      g_spurs_pm_polls  = 0;
      g_spurs_pm_exited = 0;
@@ -9962,7 +9989,7 @@ index 5d1c63de..f076e59f 100644
  
      /* RUN/END tracing: thousands of policy dispatches per second made these
       * unconditional fprintf+fflush pairs a real fraction of movie playback.
-@@ -428,8 +455,8 @@ int spu_run_policy_module(spu_lifted_entry_fn entry, int image_id,
+@@ -428,8 +479,8 @@ int spu_run_policy_module(spu_lifted_entry_fn entry, int image_id,
          /* PER-WID cap: a shared cap gets exhausted by idle wid=0/1 before the
           * jobmanager (wid=12) ever runs in a long/good run. Give each wid its
           * own budget so wid=12's pipeline is always captured. */
@@ -9973,7 +10000,7 @@ index 5d1c63de..f076e59f 100644
          if (s_pn < 300) {
              const uint8_t* L = ctx->ls;
              #define HW(o) ((L[(o)+2]<<8)|L[(o)+3])
-@@ -530,7 +557,39 @@ int spu_run_policy_module(spu_lifted_entry_fn entry, int image_id,
+@@ -530,7 +581,39 @@ int spu_run_policy_module(spu_lifted_entry_fn entry, int image_id,
                  wid, ctx->status, ctx->pc, g_spurs_pm_polls, g_spurs_pm_exited);
          fflush(stderr);
      }
@@ -10014,7 +10041,7 @@ index 5d1c63de..f076e59f 100644
      int result = g_spurs_pm_exited ? 0 : -2;
      policy_slot_release(resident);
      return result;
-@@ -647,6 +706,7 @@ int spurs_run_taskset_policy_probe(uint32_t taskset_ea, uint32_t taskid,
+@@ -647,6 +730,7 @@ int spurs_run_taskset_policy_probe(uint32_t taskset_ea, uint32_t taskid,
      /* taskset EA also planted at the SpursKernelContext taskset slot the policy
       * reads for its taskset DMA (mirrors the cri-r4 injection at LS 0x27B8). */
  #undef KBE32
