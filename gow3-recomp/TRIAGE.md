@@ -112,3 +112,15 @@ interna. El juego no carga PRX propias del disco: en el registro no aparece ning
   del cuadro llegue al estado 3. Pendiente: decodificar +0x70 (contadores de
   trabajos encolados/terminados de la lista Wws) y ver por qué wid 10 acumula
   0x131 sin terminar.
+- Corrección: no es un cuelgue total. En 21:28 el juego avanza ~1 cuadro cada
+  6 s (escrituras de etiqueta de sincronía 4, 5, 6, 7, 8 con ~6 s entre una y
+  otra) y wid 7 recibe trabajo una vez por cuadro. El hilo principal espera a
+  la lista de wid 7 (objeto 0x1250D730, datos 0x1250D780): func_002E7B18 toma
+  el mínimo de los carriles por SPU (u16 en datos+0x72..0x7E, FFFF = SPU que no
+  participa) y lo compara con el objetivo en objeto+0x2A. Durante la lentitud
+  la fila es 0023 | 0023 FFFF FFFF FFFF 0022 FFFF FFFF: el carril de la SPU 4
+  va un trabajo por detrás.
+- Prueba 21:40: otro bloqueo distinto, anterior al vídeo (nunca abre
+  ENGLISH.PSARC). El bucle principal (func_002660E4) sigue a 50 fps sin
+  contenido nuevo; el hilo cargador (guest-tid 11) espera en
+  func_00264F50 / usleep(30) a una lectura pedida con func_00264760.
