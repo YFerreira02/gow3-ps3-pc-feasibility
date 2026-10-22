@@ -67,3 +67,14 @@ interna. El juego no carga PRX propias del disco: en el registro no aparece ning
 3. Añadir las funciones SPURS que faltan, empezando por los parches de Ascension
    0003, 0008, 0011 y 0019 adaptados a v0.17.
 4. Primer arranque: compilar aquí y llevar el `.exe` al PC.
+
+## Cuelgue intermitente (2026-10-21, noche)
+- Foto del vigilante a los 120 s en dos cuelgues seguidos (20:11 y 20:18): idéntica.
+  El hilo principal (guest-tid 1) está en `func_0028DA14`, en un bucle
+  `usleep(30)` esperando que la media palabra de 16 bits en `0x649EC0 + 4*i`
+  (i = cuadro % 3; base = `*(toc-0x4C64)` = `0x649E80`) vuelva a 0. Es el
+  contador de sincronización de cada cuadro (`{u16 cuenta; u8 id; u8 estado}`,
+  lo arman `func_0028D534`/`func_0028DB7C`). Lo esperable es que lo bajen los
+  trabajos SPU al terminar; si una bajada se pierde, el juego se queda esperando.
+- Siguiente medida: `SPU_ATOM_EA=649E80` (atómicos SPU sobre esa línea) y
+  `PPU_WWATCH=0x649EC0` (escrituras PPU), vía `entorno.txt`.

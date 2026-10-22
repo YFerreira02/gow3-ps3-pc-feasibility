@@ -75,6 +75,18 @@ $env:GCM_HOLD_LOG = '1'      # registra cada vez que la GPU sale de un aparcamie
 # listas llevó el menú de 14 a 33 fps; ponerlo en todas a la vez lo colgaba.
 if ($MaxCont) { $env:SPURS_MAXCONT = $MaxCont } else { Remove-Item Env:SPURS_MAXCONT -ErrorAction SilentlyContinue }
 
+# Variables extra para diagnóstico: entorno.txt junto al script, una NOMBRE=valor
+# por línea (Claude lo deja ahí cuando necesita medir algo concreto).
+$Extra = Join-Path $Here 'entorno.txt'
+if (Test-Path $Extra) {
+    foreach ($l in Get-Content $Extra) {
+        if ($l -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
+            Set-Item -Path "Env:$($Matches[1])" -Value $Matches[2]
+            Write-Host "Diagnóstico: $($Matches[1])=$($Matches[2])"
+        }
+    }
+}
+
 # 4. Lanzar y esperar.
 $p = Start-Process -FilePath $Exe -ArgumentList "`"$Elf`"" -WorkingDirectory $Here `
      -RedirectStandardOutput $Log -RedirectStandardError "$Log.err" -PassThru
