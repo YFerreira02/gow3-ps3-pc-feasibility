@@ -87,6 +87,8 @@ add_subdirectory("${PS3RECOMP_DIR}" "${CMAKE_BINARY_DIR}/ps3recomp_sdk"
 # target version says so; MSVC's SDK defaults to the newest.
 if(MINGW)
     target_compile_definitions(ps3recomp_runtime PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
+    # getenv through boot_main's cache (see host/mingw_getenv.h).
+    target_compile_options(ps3recomp_runtime PRIVATE -include "${CMAKE_CURRENT_SOURCE_DIR}/host/mingw_getenv.h")
 endif()
 
 # ---------------------------------------------------------------------------
@@ -186,6 +188,10 @@ add_executable(${PROJECT_NAME}
     ${RECOMP_SOURCES}
     ${SPU_SOURCES}
 )
+if(MINGW)
+    set_source_files_properties("${PS3RECOMP_DIR}/runtime/ppu/tests/boot_main.cpp" ${HLE_NID_TABLE}
+        PROPERTIES COMPILE_OPTIONS "-include;${CMAKE_CURRENT_SOURCE_DIR}/host/mingw_getenv.h")
+endif()
 
 # The lifted SPU sources use bare #include "spu_context.h". Scope that include
 # directory (and their flags) to those TUs alone: adding it to the whole target

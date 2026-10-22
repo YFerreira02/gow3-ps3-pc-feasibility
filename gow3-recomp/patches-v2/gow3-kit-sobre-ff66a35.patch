@@ -6038,7 +6038,7 @@ index db9ea001..0533c2af 100644
          uint32_t own = vm_read32(lwmutex + LWM_OWNER);
          uint32_t rc  = vm_read32(lwmutex + LWM_RECUR);
 diff --git a/runtime/ppu/tests/boot_main.cpp b/runtime/ppu/tests/boot_main.cpp
-index a55afb05..38dedbc5 100644
+index a55afb05..3380b63c 100644
 --- a/runtime/ppu/tests/boot_main.cpp
 +++ b/runtime/ppu/tests/boot_main.cpp
 @@ -21,6 +21,9 @@
@@ -6066,7 +6066,7 @@ index a55afb05..38dedbc5 100644
  /* timeBeginPeriod: windows.h is included with WIN32_LEAN_AND_MEAN, which
   * excludes the multimedia timer API, so it must be asked for by name -- and
   * AFTER windows.h, since timeapi.h uses UINT and friends. */
-@@ -118,28 +124,28 @@ char* __cdecl cached_getenv(const char* name)
+@@ -118,28 +124,33 @@ char* __cdecl cached_getenv(const char* name)
          const char* k = s_env[i].key;
          MemoryBarrier();
          if (!k) break;
@@ -6098,7 +6098,12 @@ index a55afb05..38dedbc5 100644
 +            if (st < 0) st = env_lookup_os("GETENV_STATS") ? 1 : 0;
 +            if (st) {
 +                static unsigned cnt[1024]; static void* ra[1024]; static unsigned long long tot;
-+                cnt[i]++; ra[i] = _ReturnAddress();
++                cnt[i]++;
++#if defined(_MSC_VER)
++                ra[i] = _ReturnAddress();
++#else
++                ra[i] = __builtin_return_address(0);
++#endif
 +                if ((++tot & ((1u << 22) - 1)) == 0) {
 +                    const uintptr_t exe = (uintptr_t)GetModuleHandleA(NULL);
 +                    for (int r = 0; r < 5; r++) {
@@ -6117,18 +6122,20 @@ index a55afb05..38dedbc5 100644
      }
      AcquireSRWLockExclusive(&s_env_lock);
      const char* val = NULL; int found = 0;
-@@ -160,7 +166,10 @@ char* __cdecl cached_getenv(const char* name)
+@@ -160,7 +171,12 @@ char* __cdecl cached_getenv(const char* name)
      return (char*)val;
  }
  }
 +#ifdef _MSC_VER
  extern "C" char* (__cdecl* __imp_getenv)(const char*) = cached_getenv;
-+#endif  /* MinGW defines __imp_getenv in its CRT import library: the cache is
++#endif
++/* Called by name from MinGW builds (host/mingw_getenv.h maps getenv here). */
++extern "C" char* __cdecl ps3_cached_getenv(const char* name) { return cached_getenv(name); }  /* MinGW defines __imp_getenv in its CRT import library: the cache is
 +         * not installed there and getenv stays the CRT's (slower, correct). */
  
  /* Last-chance crash reporter: vm_base accesses are bounds-guarded, so a real
   * access violation means a HOST pointer deref (e.g. a bad function pointer or a
-@@ -446,6 +455,17 @@ static DWORD WINAPI guest_prof_thread(LPVOID)
+@@ -446,6 +462,17 @@ static DWORD WINAPI guest_prof_thread(LPVOID)
  
  extern "C" const char* cellGame_get_title(void);   /* PARAM.SFO TITLE, for the caption */
  
@@ -6146,7 +6153,7 @@ index a55afb05..38dedbc5 100644
  static DWORD WINAPI vblank_ticker(LPVOID)
  {
      /* Window caption: $PS3_TITLE wins, else the TITLE field PARAM.SFO already
-@@ -485,17 +505,43 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -485,17 +512,43 @@ static DWORD WINAPI vblank_ticker(LPVOID)
       * window DXGI Present throttles hard, which previously stalled these ticks and
       * paced the game's main loop to ~0.5fps. Drive the ticks off REAL elapsed time
       * and catch up in a bounded burst so present latency never slows the game. */
@@ -6193,7 +6200,7 @@ index a55afb05..38dedbc5 100644
              cellGcmTickVBlank();
              cellGcmTickFlip();
              /* Present a pending flip BEFORE draining further: the flip fires
-@@ -514,10 +560,10 @@ static DWORD WINAPI vblank_ticker(LPVOID)
+@@ -514,10 +567,10 @@ static DWORD WINAPI vblank_ticker(LPVOID)
               * Doing it here (not after present) keeps those fences advancing at 60Hz
               * even when present() throttles on a hidden/occluded window. */
              if (rsx_ok) cellGcm_rsx_process_fifo();
@@ -6206,7 +6213,7 @@ index a55afb05..38dedbc5 100644
          /* Drain at the outer ~4ms cadence too (not just the 16ms tick):
           * titles fence EVERY render pass on an RSX label the drain writes;
           * at 16ms per fence wave's six passes paced the guest to ~7 fps.
-@@ -654,6 +700,32 @@ static void dump_threads(const char* label, HMODULE self)
+@@ -654,6 +707,32 @@ static void dump_threads(const char* label, HMODULE self)
                      dbg_printf( "[WATCHDOG]   tid %5lu in %s\n",
                              (unsigned long)te.th32ThreadID, base ? base + 1 : path);
                  }
@@ -6239,7 +6246,7 @@ index a55afb05..38dedbc5 100644
                  /* Scan the suspended thread's stack for boot-module return
                   * addresses to reconstruct the lifted call chain — done for ALL
                   * threads (even when RIP is parked in ntdll inside a CriticalSection
-@@ -833,6 +905,9 @@ static void prof_hit(int tab, uint64_t key)
+@@ -833,6 +912,9 @@ static void prof_hit(int tab, uint64_t key)
          if (!s_prof_key[tab][i]) { s_prof_key[tab][i] = key; s_prof_ct[tab][i] = 1; return; }
      }
  }
@@ -6249,7 +6256,7 @@ index a55afb05..38dedbc5 100644
  static void dbg_prof(DWORD tid, unsigned sec)
  {
      /* Suspending ourselves never resumes: the console would hang for good. */
-@@ -853,7 +928,7 @@ static void dbg_prof(DWORD tid, unsigned sec)
+@@ -853,7 +935,7 @@ static void dbg_prof(DWORD tid, unsigned sec)
                  DWORD64 base = 0;
                  PRUNTIME_FUNCTION rf = RtlLookupFunctionEntry(c.Rip, &base, NULL);
                  uint64_t key = rf ? base + rf->BeginAddress : c.Rip;
@@ -6258,7 +6265,7 @@ index a55afb05..38dedbc5 100644
                  /* first exe frame of a sample whose leaf is in a DLL: who called out */
                  if (!got && (uintptr_t)(key - exe) < 0x40000000u) { got = 1; if (d > 0) prof_hit(2, key); }
                  int dup = 0; for (int k = 0; k < ns; k++) dup |= seen[k] == key;
-@@ -871,7 +946,7 @@ static void dbg_prof(DWORD tid, unsigned sec)
+@@ -871,7 +953,7 @@ static void dbg_prof(DWORD tid, unsigned sec)
      for (int tab = 0; tab < 3; tab++) {
          static const char* tn[3] = { "exclusive", "inclusive", "exe caller of DLL leaf" };
          dbg_printf("  --- %s ---%c", tn[tab], 10);
@@ -6267,7 +6274,7 @@ index a55afb05..38dedbc5 100644
              uint32_t best = 0; int bi = -1;
              for (int k = 0; k < PROF_SLOTS; k++) if (s_prof_ct[tab][k] > best) { best = s_prof_ct[tab][k]; bi = k; }
              if (bi < 0) break;
-@@ -934,46 +1009,47 @@ static DWORD WINAPI debug_console(LPVOID param)
+@@ -934,46 +1016,47 @@ static DWORD WINAPI debug_console(LPVOID param)
              dump_threads("console", self);
          } else if (!strcmp(verb, "find32") && sscanf(cmd, "%*s %x", &a) == 1) {
              /* find32 <hex>: every aligned big-endian u32 equal to <hex> in committed
@@ -6345,7 +6352,7 @@ index a55afb05..38dedbc5 100644
              dbg_prof((DWORD)a, b ? b : 5);
          } else if (!strcmp(verb, "hle")) {
              dbg_printf("  last HLE = 0x%08X (%s)%c", g_last_hle_nid,
-@@ -1139,7 +1215,12 @@ int main(int argc, char** argv)
+@@ -1139,7 +1222,12 @@ int main(int argc, char** argv)
      vm_base = (uint8_t*)VirtualAlloc(NULL, VM_SIZE, MEM_RESERVE, PAGE_READWRITE);
      ppu_vm_size = 0;   /* full 32-bit space backed -> OOB guard unnecessary */
  #else
@@ -6359,7 +6366,7 @@ index a55afb05..38dedbc5 100644
      ppu_vm_size = 0xE0000000u;
  #endif
      if (!vm_base) { printf("vm alloc failed\n"); return 1; }
-@@ -1241,6 +1322,31 @@ int main(int argc, char** argv)
+@@ -1241,6 +1329,31 @@ int main(int argc, char** argv)
      printf("\n[boot] dispatching entry OPD 0x%08X (stack top 0x%08X)\n\n", entry, stack_top);
  #ifdef _WIN32
      fprintf(stderr, "[boot] MAIN guest thread tid=%lu\n", (unsigned long)GetCurrentThreadId());
