@@ -18,10 +18,17 @@ import sys; d=open(sys.argv[1],'rb').read(); o=0x49FF80-0x10000; open(sys.argv[2
 PY
 python3 "$KIT/tools/wrap_spu_elf.py" "$here/meta/wws_pm.bin" --base 0xA00 --entry 0xA00 \
     --out "$here/meta/spu/spu_wws_pm_at_0049FF80.elf"
+# --extra-funcs: manejador de interrupciones de la política Wws (0xA2C, 0xA68)
 python3 "$KIT/tools/build_spu_workloads.py" --images "$here/meta/spu" --lifted "$here/src/spu" \
     --out "$here/src/spu/spu_workloads.c" --register-fn gow3_spu_register_all --constructor \
     --title gow3 --relift \
-    --extra-funcs spu_wws_pm_at_0049FF80=0xA2C,0xA68   # manejador de interrupciones de la política Wws
+    --extra-funcs spu_wws_pm_at_0049FF80=0xA2C,0xA68 \
+    --extra-funcs spu_0004_at_00493100=0xff98,0x10038,0x10128,0x10208,0x102c8,0x10348,0x10378,0x103e0,0x10458,0x10f80,0x10fc0,0x412c \
+    --extra-funcs spu_0005_at_004A5B80=0x1ec18,0x1ecb8,0x1eda8,0x1ee88,0x1ef48,0x1efc8,0x1eff8,0x1f060,0x1f0d8,0x1fc00,0x1fc40,0x412c \
+    --extra-funcs spu_0006_at_004C8A80=0x11018,0x110b8,0x111a8,0x11288,0x11348,0x113c8,0x113f8,0x11460,0x114d8,0x12000,0x12040,0x412c \
+    --extra-funcs spu_0007_at_004DFA00=0x7f98,0x8038,0x8128,0x8208,0x82c8,0x8348,0x8378,0x83e0,0x8458,0x8f80,0x8fc0,0x412c
+# Las 4 últimas: entradas de los ELF SPU cuando la política Wws los carga como
+# módulos de trabajo (bloque común en base+0x18..0x1040; ver host/gow3_spu_elf_overlays.c).
 
 # Módulos de trabajo Wws incrustados en el EBOOT (cabecera: 4 ila | entry @0x10 |
 # tamaño @0x14 | 0 | 0 | 0xC0DEC0DE @0x20). Se omiten los 4 que son carga útil de

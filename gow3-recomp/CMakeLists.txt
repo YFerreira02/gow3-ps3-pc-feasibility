@@ -183,6 +183,7 @@ add_executable(${PROJECT_NAME}
     # Runtime switches this title needs on by default (live draw engine,
     # host Edge Zlib).
     "${CMAKE_CURRENT_SOURCE_DIR}/host/gow3_defaults.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/host/gow3_spu_elf_overlays.c"
     ${PS3RECOMP_SCAFFOLD}
     ${HLE_NID_TABLE}
     ${RECOMP_SOURCES}
