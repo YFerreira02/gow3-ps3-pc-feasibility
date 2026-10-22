@@ -103,3 +103,12 @@ interna. El juego no carga PRX propias del disco: en el registro no aparece ning
   SPU quedan ocupadas por trabajos de RenderJobs (wid 7) que esperan girando, y
   las listas EDGE ya no consiguen SPU. Siguiente: SPURS_WLDUMP=15 (ocupación
   de cada SPU) y SPURS_PM_RUNLOG=7.
+- Prueba 21:28 (SPURS_WLDUMP=15): durante el cuelgue las 5 SPU del SPURS
+  grande están ocupadas (wid 10, 0, 1, 7, 3), todos los readyCount en 0 salvo
+  wid 7 = 1. Las cabeceras de las listas EDGE (wid 8/9/10, datos en
+  0x14AC2700 / 0x14AD6980 / 0x14AEAC00) solo difieren en +0x70: 00010001 en
+  marcha normal; en el cuelgue 0 en wid 8 y 9 y 01310131 en wid 10. El hilo
+  principal espera (func_002EAFB0 -> func_002E7B18(lista, 3)) a que la lista
+  del cuadro llegue al estado 3. Pendiente: decodificar +0x70 (contadores de
+  trabajos encolados/terminados de la lista Wws) y ver por qué wid 10 acumula
+  0x131 sin terminar.
