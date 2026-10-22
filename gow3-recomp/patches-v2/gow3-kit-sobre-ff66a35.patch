@@ -643,7 +643,7 @@ index e634dd49..869e58ec 100644
  
  typedef void (*vdec_ff_emit_fn)(void* ctx, const VdecFfPicture* pic);
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
-index f2b4c119..d687e8bf 100644
+index f2b4c119..224323e9 100644
 --- a/libs/input/cellPad.c
 +++ b/libs/input/cellPad.c
 @@ -137,7 +137,16 @@ static int pad_host_window_focused(void)
@@ -664,6 +664,71 @@ index f2b4c119..d687e8bf 100644
  }
  
  static void pad_poll_keyboard(void)
+@@ -165,6 +174,7 @@ static void pad_poll_keyboard(void)
+         { 'Q',       CELL_PAD_CTRL_L1 },      { 'W',      CELL_PAD_CTRL_R1 },
+         { '1',       CELL_PAD_CTRL_L2 },      { '2',      CELL_PAD_CTRL_R2 },
+         { VK_RETURN, CELL_PAD_CTRL_START },   { VK_TAB,   CELL_PAD_CTRL_SELECT },
++        { VK_SPACE,  CELL_PAD_CTRL_CROSS },   { VK_BACK,  CELL_PAD_CTRL_CIRCLE },
+     };
+ 
+     u16 btns = 0;
+@@ -421,6 +431,7 @@ static unsigned long long pad_now_ms(void)
+ #endif
+ }
+ 
++static unsigned s_latch[PAD_MAX_HOST_PORTS];
+ static void pad_poll_backend(void)
+ {
+     /* Benign race: two threads may poll in the same tick. That costs one extra
+@@ -442,7 +453,24 @@ static void pad_poll_backend(void)
+ #ifdef _WIN32
+     if (!s_host_state[0].connected) pad_poll_keyboard();
+ #endif
++    /* Remember every button seen down since the guest last read the port, so
++     * a press shorter than the guest's frame is not lost (at 2 fps a tap of
++     * the X key fell between two reads and the game never saw it). */
++    for (int _i = 0; _i < PAD_MAX_HOST_PORTS; _i++)
++        __atomic_or_fetch(&s_latch[_i], (unsigned)s_host_state[_i].buttons, __ATOMIC_RELAXED);
++}
++
++#ifdef _WIN32
++/* Windows has no host loop calling cellPad_poll (host_posix.c does it on
++ * Linux): sample the pad on its own thread every PAD_POLL_INTERVAL_MS so the
++ * latch above sees presses between guest reads. */
++static DWORD WINAPI pad_bg_thread(LPVOID arg)
++{
++    (void)arg;
++    for (;;) { Sleep(PAD_POLL_INTERVAL_MS); if (s_pad_initialized) pad_poll_backend(); }
++    return 0;
+ }
++#endif
+ 
+ /* ---------------------------------------------------------------------------
+  * API implementations
+@@ -471,6 +499,10 @@ s32 cellPadInit(u32 max_connect)
+ 
+     /* Do an initial poll to detect connected controllers */
+     pad_poll_backend();
++#ifdef _WIN32
++    { static int started = 0;
++      if (!started) { started = 1; HANDLE h = CreateThread(NULL, 0, pad_bg_thread, NULL, 0, NULL); if (h) CloseHandle(h); } }
++#endif
+ 
+     return CELL_OK;
+ }
+@@ -593,8 +625,10 @@ skip_inject: ;
+      * Split correctly — writing the whole value into DIGITAL1 with DIGITAL2=0
+      * left every face button (cross/circle/triangle/square, L1/L2/R1/R2) dead.
+      * (via sagemono, PR #42) */
+-    data->button[CELL_PAD_BTN_OFFSET_DIGITAL1] = (u16)(hs->buttons & 0xFF);
+-    data->button[CELL_PAD_BTN_OFFSET_DIGITAL2] = (u16)((hs->buttons >> 8) & 0xFF);
++    const unsigned btns_seen = (unsigned)hs->buttons |
++        (port_no < PAD_MAX_HOST_PORTS ? __atomic_exchange_n(&s_latch[port_no], 0u, __ATOMIC_RELAXED) : 0u);
++    data->button[CELL_PAD_BTN_OFFSET_DIGITAL1] = (u16)(btns_seen & 0xFF);
++    data->button[CELL_PAD_BTN_OFFSET_DIGITAL2] = (u16)((btns_seen >> 8) & 0xFF);
+ 
+     /* PAD_AUTOPRESS: headless bring-up input -- pulse CROSS then START every few
+      * seconds of polling so boot screens that wait for input advance without a
 diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
 index 015913a8..7d80d2b2 100644
 --- a/libs/spurs/cellSpurs.c

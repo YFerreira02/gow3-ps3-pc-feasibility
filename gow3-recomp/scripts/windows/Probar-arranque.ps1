@@ -66,6 +66,9 @@ $env:SPU_SMC_LSDUMP = ''   # ya se copiaron (logs\lsdump)
 # Foto de todos los hilos del juego (también los del PS3: en qué función y qué
 # esperan) a los 120 y 170 s: si se colgó antes, muestra dónde.
 $env:WATCHDOG_AT = '120,170'
+# Botones a distancia: Claude escribe en pad.txt el botón (0x4000 = X/cruz,
+# 0x0008 = START) y el juego lo pulsa.
+$env:PAD_FILE = Join-Path $Here 'pad.txt'
 $env:GCM_HOLD_LOG = '1'      # registra cada vez que la GPU sale de un aparcamiento
 # Cuántas SPU puede usar a la vez cada lista de trabajos Wws (por defecto 1).
 # wid 7 = RenderJobs, 8-10 = EDGE0-2 (geometría). En Ascension, repartir así sus
@@ -77,7 +80,7 @@ $p = Start-Process -FilePath $Exe -ArgumentList "`"$Elf`"" -WorkingDirectory $He
      -RedirectStandardOutput $Log -RedirectStandardError "$Log.err" -PassThru
 Write-Host "Gow3Recomp en marcha (PID $($p.Id)). Disco $Disc. Registro: $Log"
 Write-Host ''
-Write-Host 'Teclado = mando: Z = X (cruz), X = circulo, A = cuadrado, S = triangulo,'
+Write-Host 'Teclado = mando: Z o Espacio = X (cruz), X = circulo, A = cuadrado, S = triangulo,'
 Write-Host '                 flechas = cruceta, Enter = START, Tab = SELECT, Q/W = L1/R1.'
 Write-Host '(Haz clic en la ventana del juego para que reciba las teclas.)'
 Write-Host ''
