@@ -135,3 +135,11 @@ interna. El juego no carga PRX propias del disco: en el registro no aparece ning
   publica trabajos y cómo la política los reclama); hay que leer el código de
   la política (spu_wws_pm_at_0049FF80, LS 0xA00..0x3900) para saber qué
   condición deja trabajos sin reclamar.
+- SPURS_STICKY (872bf50): primera prueba (21:59) sin parada en 3 min, con
+  ~99.000 paquetes de dibujo (antes ~600) y 2-16 fps. La segunda (22:04) se
+  paró de nuevo. Fallo de la primera versión: la marca era un único wid por
+  SPU y se borraba aunque la admisión forzada no pudiera hacerse (p. ej. maxcont
+  1 y otra SPU con esa lista), o se pisaba al ejecutar otra workload. Ahora:
+  máscara de wids pendientes por SPU, se mantiene hasta que esa SPU los
+  ejecute, y ninguna otra SPU admite una lista que otra tiene pendiente. Solo
+  para la política Wws (tamaño 0x2F00).
