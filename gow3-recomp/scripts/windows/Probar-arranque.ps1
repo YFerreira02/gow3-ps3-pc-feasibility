@@ -62,7 +62,10 @@ $env:GCM_PARK_WAIT_MS = "$ParkWaitMs"
 # que se carga en tiempo de ejecución (para poder traducirlo también).
 $env:SPU_INTERP_HIST = '1'
 $LsDump = Join-Path $Logs 'lsdump'; New-Item -ItemType Directory -Force $LsDump | Out-Null
-$env:SPU_SMC_LSDUMP = "$LsDump,206"
+$env:SPU_SMC_LSDUMP = ''   # ya se copiaron (logs\lsdump)
+# Foto de todos los hilos del juego (también los del PS3: en qué función y qué
+# esperan) a los 120 y 170 s: si se colgó antes, muestra dónde.
+$env:WATCHDOG_AT = '120,170'
 $env:GCM_HOLD_LOG = '1'      # registra cada vez que la GPU sale de un aparcamiento
 # Cuántas SPU puede usar a la vez cada lista de trabajos Wws (por defecto 1).
 # wid 7 = RenderJobs, 8-10 = EDGE0-2 (geometría). En Ascension, repartir así sus
