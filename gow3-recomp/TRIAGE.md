@@ -86,3 +86,11 @@ interna. El juego no carga PRX propias del disco: en el registro no aparece ning
   trabajo de ese cuadro. No es una bajada perdida, es un trabajo que no corre.
 - Siguiente medida: SPURS_MAXCONT vacío (1 SPU por lista) en vez de
   7=3,8=3,9=3,10=3, que en Ascension ya colgaba si se aplicaba a todas.
+- Prueba 21:13 con SPURS_MAXCONT vacío (confirmado en arranque_*.txt): se cuelga
+  igual (esta vez el turno 1, wid 9). MAXCONT queda descartado; el lanzador ya
+  no lo pone por defecto.
+- Siguiente medida: SPURS_KICKLOG (cada admisión con trabajo pendiente) y
+  SPURS_PM_RUNLOG=8, para ver si la lista atascada tiene readyCount y no se
+  admite, o no recibe aviso.
+- Nota del puente de archivos: al reescribir un archivo con el mismo stagedPath
+  a veces llega la versión anterior al PC. Usar una carpeta nueva por envío.

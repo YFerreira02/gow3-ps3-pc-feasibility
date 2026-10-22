@@ -9,7 +9,7 @@ param(
     [int]$Seconds   = 180,
     [string]$Tag    = '',
     [int]$ParkWaitMs = 30000,
-    [string]$MaxCont = '7=3,8=3,9=3,10=3'
+    [string]$MaxCont = ''
 )
 $ErrorActionPreference = 'Stop'
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -81,7 +81,8 @@ $Extra = Join-Path $Here 'entorno.txt'
 if (Test-Path $Extra) {
     foreach ($l in Get-Content $Extra) {
         if ($l -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
-            Set-Item -Path "Env:$($Matches[1])" -Value $Matches[2]
+            if ($Matches[2] -eq '') { Remove-Item -Path "Env:$($Matches[1])" -ErrorAction SilentlyContinue }
+            else { Set-Item -Path "Env:$($Matches[1])" -Value $Matches[2] }
             Write-Host "Diagnóstico: $($Matches[1])=$($Matches[2])"
         }
     }
@@ -131,5 +132,5 @@ if (-not $p.HasExited) {
     if (-not $p.HasExited) { & taskkill.exe /PID $p.Id /T /F | Out-Null }
     $estado = "cerrado tras $Seconds s"
 } else { $estado = "terminó solo, código $($p.ExitCode)" }
-"$estado | disco=$Disc | tag=$Tag | SPU_OVL_OFF=$env:SPU_OVL_OFF | park=$ParkWaitMs | maxcont=$MaxCont | $(Get-Date -Format s)" | Out-File (Join-Path $Logs "arranque_$Stamp.txt") -Encoding utf8
+"$estado | disco=$Disc | tag=$Tag | SPU_OVL_OFF=$env:SPU_OVL_OFF | park=$ParkWaitMs | SPURS_MAXCONT=$env:SPURS_MAXCONT | entorno=$((Get-Content $Extra -ErrorAction SilentlyContinue) -join ';') | $(Get-Date -Format s)" | Out-File (Join-Path $Logs "arranque_$Stamp.txt") -Encoding utf8
 Write-Host "Listo: $estado."
