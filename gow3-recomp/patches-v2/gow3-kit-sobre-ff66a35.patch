@@ -642,6 +642,19 @@ index e634dd49..869e58ec 100644
  } VdecFfPicture;
  
  typedef void (*vdec_ff_emit_fn)(void* ctx, const VdecFfPicture* pic);
+diff --git a/libs/filesystem/cellFs.c b/libs/filesystem/cellFs.c
+index 942ea515..9a8048db 100644
+--- a/libs/filesystem/cellFs.c
++++ b/libs/filesystem/cellFs.c
+@@ -584,7 +584,7 @@ s32 cellFsLseek(CellFsFd fd, s64 offset, s32 whence, u64* pos)
+         if (whence == CELL_FS_SEEK_CUR) host_whence = SEEK_CUR;
+         if (whence == CELL_FS_SEEK_END) host_whence = SEEK_END;
+ 
+-#ifdef _MSC_VER
++#ifdef _WIN32   /* MinGW too: its off_t is 32-bit, so fseeko cannot pass 2 GB */
+         _fseeki64(s_files[fd].host_fp, offset, host_whence);
+         s64 cur = _ftelli64(s_files[fd].host_fp);
+ #else
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
 index f2b4c119..224323e9 100644
 --- a/libs/input/cellPad.c
@@ -7892,10 +7905,23 @@ index 506da3f9..53d763a1 100644
          fn = spu_lookup(ctx->pc, ctx->resident_task);
      /* Resident overlay next: streamed code overwrote that LS range, so its lift
 diff --git a/runtime/spu/spu_coherency.c b/runtime/spu/spu_coherency.c
-index 923d8bd9..129a9b0c 100644
+index 923d8bd9..e01e873e 100644
 --- a/runtime/spu/spu_coherency.c
 +++ b/runtime/spu/spu_coherency.c
-@@ -72,14 +72,18 @@ void spu_lockline_unlock(void) { atomic_flag_clear_explicit(&g_lockline, memory_
+@@ -30,7 +30,11 @@ extern "C" {
+  * intrinsic (no runtime library symbol needed); elsewhere use the C11
+  * equivalent, which lowers to the same LL/SC or lock-xchg on every target.
+  * ===========================================================================*/
+-#if defined(_MSC_VER)
++#if defined(_WIN32)
++/* All Windows builds, MSVC and MinGW alike: under MinGW this used to fall to
++ * the bare test-and-set loop below -- no pause, no yield -- and with six SPU
++ * threads and the PPU on a 4-core CPU a waiter spun through the holder's
++ * whole time slice whenever the holder was descheduled. */
+ #include <intrin.h>
+ #include <windows.h>   /* SwitchToThread */
+ static volatile long g_lockline = 0;
+@@ -72,14 +76,18 @@ void spu_lockline_unlock(void) { atomic_flag_clear_explicit(&g_lockline, memory_
  #define SPU_COH_LINES       (1u << (32 - SPU_COH_LINE_SHIFT))   /* 2^25 lines */
  #define SPU_COH_BITMAP_SZ   (SPU_COH_LINES / 8)                 /* 4 MiB */
  
