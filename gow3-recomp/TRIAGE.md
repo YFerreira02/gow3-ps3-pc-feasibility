@@ -124,3 +124,14 @@ interna. El juego no carga PRX propias del disco: en el registro no aparece ning
   ENGLISH.PSARC). El bucle principal (func_002660E4) sigue a 50 fps sin
   contenido nuevo; el hilo cargador (guest-tid 11) espera en
   func_00264F50 / usleep(30) a una lectura pedida con func_00264760.
+- Prueba 21:45: parada total tras la intro. Todas las SPU sin trabajo (polls≈0
+  en cada ejecución), el hilo principal en func_0028DA14 esperando el
+  contador del cuadro; carriles: wid 7 0005, wid 8 0001, wid 9 0000, wid 10 0010
+  (la lista EDGE1 no avanzó). Hipótesis: la política Wws, con su LS persistente,
+  ve una copia vieja de la cola.
+- Prueba 21:49 con SPURS_PM_FRESH=1 (contexto nuevo en cada entrada): se para
+  igual y va más lenta. Hipótesis descartada.
+- Estado: el fallo está en el protocolo de las listas Wws (cómo una lista
+  publica trabajos y cómo la política los reclama); hay que leer el código de
+  la política (spu_wws_pm_at_0049FF80, LS 0xA00..0x3900) para saber qué
+  condición deja trabajos sin reclamar.
