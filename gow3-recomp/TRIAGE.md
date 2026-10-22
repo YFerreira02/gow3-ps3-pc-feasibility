@@ -143,3 +143,7 @@ interna. El juego no carga PRX propias del disco: en el registro no aparece ning
   máscara de wids pendientes por SPU, se mantiene hasta que esa SPU los
   ejecute, y ninguna otra SPU admite una lista que otra tiene pendiente. Solo
   para la política Wws (tamaño 0x2F00).
+- Prueba 22:08 con la máscara (febdebe): sin parada en los 3 min; 1696
+  cuadros, ~175.000 paquetes de dibujo. Con ✕ pulsada por PAD_FILE a ~110 y
+  ~140 s el juego avanza y abre CINEMATICS/OPENINGCREDITS.M2V (la segunda
+  cinemática, tras SMLOGO). 1-18 fps, irregular.
