@@ -53,3 +53,8 @@ PY
 python3 "$KIT/tools/lift_jobmods.py" --jobmods "$here/meta/jobmods" --out "$here/src/spu" \
     --register "$here/src/spu/jobmods_register.c" --symbol-prefix gow3 \
     --extra-funcs-json "$here/tools/jobmods_extra_funcs.json"   # entradas vistas en "[spu-smc] microstep ... ovl=N"
+# Fragmento de código que el módulo 206 copia a su búfer (LS 0x160D0, 0x1E0D0...):
+# EA 0x52B3E0, 0x5F0 bytes, sacado de los volcados SPU_SMC_LSDUMP. Traducido
+# independiente de la posición (imagen 300).
+python3 "$KIT/tools/lift_spu_pic.py" --elf "$ELF" --fragments "$here/tools/pic_fragments.json" \
+    --out "$here/src/spu" --register "$here/src/spu/pic_register.c" --symbol-prefix gow3
