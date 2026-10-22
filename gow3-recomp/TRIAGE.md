@@ -94,3 +94,12 @@ interna. El juego no carga PRX propias del disco: en el registro no aparece ning
   admite, o no recibe aviso.
 - Nota del puente de archivos: al reescribir un archivo con el mismo stagedPath
   a veces llega la versión anterior al PC. Usar una carpeta nueva por envío.
+- Prueba 21:23 (KICKLOG + PM_RUNLOG=8): esta vez los tres contadores quedaron
+  en 0 y el hilo principal estaba más adelante, en func_002EAFB0, que repite
+  func_002E7B18(lista, 3, ...) hasta que la lista de trabajos llega al estado
+  3. Hacia t=344928 ms el núcleo SPURS deja de admitir cualquier workload con
+  trabajo pendiente (no hay más líneas [spurs-kick], aunque wid 6 tenía
+  ready=1), mientras wid 7 sigue haciendo atómicos en 0x649E80. Hipótesis: las
+  SPU quedan ocupadas por trabajos de RenderJobs (wid 7) que esperan girando, y
+  las listas EDGE ya no consiguen SPU. Siguiente: SPURS_WLDUMP=15 (ocupación
+  de cada SPU) y SPURS_PM_RUNLOG=7.
