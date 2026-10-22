@@ -78,3 +78,11 @@ interna. El juego no carga PRX propias del disco: en el registro no aparece ning
   trabajos SPU al terminar; si una bajada se pierde, el juego se queda esperando.
 - Siguiente medida: `SPU_ATOM_EA=649E80` (atómicos SPU sobre esa línea) y
   `PPU_WWATCH=0x649EC0` (escrituras PPU), vía `entorno.txt`.
+- Resultado (20:24 y 20:41, ambas colgadas): cada cuadro el PPU pone a 1 la
+  cuenta de su turno y la baja un único trabajo SPU por GETLLAR/PUTLLC, de una
+  lista EDGE distinta por turno (turno 0 = wid 8, 1 = wid 9, 2 = wid 10). Los
+  atómicos funcionan (los PUTLLC fallidos son de wid 7 y se reintentan bien).
+  En el cuelgue el turno 0 queda en 1: la lista EDGE0 (wid 8) nunca ejecuta su
+  trabajo de ese cuadro. No es una bajada perdida, es un trabajo que no corre.
+- Siguiente medida: SPURS_MAXCONT vacío (1 SPU por lista) en vez de
+  7=3,8=3,9=3,10=3, que en Ascension ya colgaba si se aplicaba a todas.
